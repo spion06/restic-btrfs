@@ -1,0 +1,53 @@
+[package]
+name = "rbtrfs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Consistent multi-subvolume btrfs snapshot backups into a restic-format repository"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/spion06/restic-btrfs"
+readme = "README.md"
+keywords = ["btrfs", "backup", "restic", "snapshot"]
+categories = ["command-line-utilities", "filesystem"]
+
+[[bin]]
+name = "rbtrfs"
+path = "src/main.rs"
+
+[[example]]
+name = "spike_aspath_merge"
+path = "spikes/aspath_merge.rs"
+
+[[example]]
+name = "spike_restic_compat"
+path = "spikes/restic_compat.rs"
+
+[[example]]
+name = "spike_mount_ns"
+path = "spikes/mount_ns.rs"
+
+[[example]]
+name = "spike_full_spine"
+path = "spikes/full_spine.rs"
+
+[dependencies]
+rustic_core = "0.13"
+rustic_backend = "0.7"
+anyhow = "1"
+tempfile = "3"
+nix = { version = "0.31.3", features = ["mount", "sched", "fs", "user", "hostname", "signal"] }
+libbtrfsutil = "0.8.0"
+clap = { version = "4.6.6", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"
+serde_json = "1"
+glob = "0.3.4"
+
+[dev-dependencies]
+nix = { version = "0.31.3", features = ["user"] }
+testcontainers = { version = "0.28", features = ["blocking"] }
+
+# rustic_core derives the repository key with scrypt on every open; unoptimised
+# that takes seconds per open and made each end-to-end test take ~35s.
+[profile.dev.package."*"]
+opt-level = 3
