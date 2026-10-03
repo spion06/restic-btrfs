@@ -25,7 +25,7 @@ v1 milestones 0–4 implemented and tested end-to-end against official restic 0.
 | `rbtrfs restore <id\|latest> --subvol /home --target DIR [--as-subvolume] [--host H \| --any-host]` | restore one subvolume into a directory (or, with `--as-subvolume`, into a new btrfs subvolume); `latest` = newest merged snapshot from this host |
 | `rbtrfs ls <id\|latest> [PATH]` | list a snapshot's contents |
 | `rbtrfs dump <id\|latest> PATH` | write one file from a snapshot to stdout |
-| `rbtrfs forget [--prune [--instant-delete]] [--dry-run]` | apply the profile's `[retention]` to the repository (needs root: takes the run lock) |
+| `rbtrfs forget [--prune [--instant-delete --allow-unsafe]] [--dry-run]` | apply the profile's `[retention]` to the repository (needs root: takes the run lock) |
 | `rbtrfs gc [--keep-local N] [--keep-local-days D] [--all-keys]` | delete local btrfs snapshots left by past or crashed runs |
 
 Not yet: systemd units and a mountable (FUSE) restore view. Restores write plain
@@ -93,8 +93,9 @@ to make the next run incremental, so forget keeps just those of the newest run.
 Snapshots with other labels (your own restic jobs) are never touched. Without a
 `[retention]` table `forget` refuses to do anything. `--prune` also frees the data
 nothing references any more; by default rustic marks it for deletion and removes
-it on a later prune, `--instant-delete` removes it now (only if nothing else is
-using the repository).
+it on a later prune, `--instant-delete` removes it now, but is only safe if nothing else is using the
+repository, so it asks you to type `yes` on a terminal, and elsewhere (cron,
+systemd) refuses unless `--allow-unsafe` is passed.
 
 **Staging.** `staging` defaults to `"top-level"` (snapshots under
 `<subvolid=5>/.rbtrfs-snapshots/`, reached by a transient mount inside a private
@@ -137,7 +138,7 @@ depends on which tool touches the repository:
 | `rustic` forget/prune with default options | yes by design: two-phase pruning only *marks* unneeded packs and deletes them after `keep_delete` (23h), recovering any that turn out to be used. Exercised in the tests, also with `keep_delete` set to 0 |
 | `restic backup` / readers (`restore`, `ls`, `check`) | yes (tested against a pruning rustic) |
 | **`restic forget --prune` / `restic prune`** | **no.** restic relies on locks that rbtrfs cannot take, so its prune can delete packs an in-flight backup has written but not yet indexed. Reproduced: `restic check` reported a missing pack while the backup had exited 0 |
-| **`--instant-delete`** (`rbtrfs forget` or `rustic prune`) | **no.** It skips the two-phase safety. Reproduced: a concurrent backup crashed inside rustic_core |
+| **`--instant-delete`** (`rbtrfs forget` needs `--allow-unsafe` for it; also `rustic prune`) | **no.** It skips the two-phase safety. Reproduced: a concurrent backup crashed inside rustic_core |
 
 So: prune with `rbtrfs forget --prune` (or rustic), never with restic's own prune
 while backups can run; and only use `--instant-delete` when nothing else is

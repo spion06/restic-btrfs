@@ -198,7 +198,7 @@ rbtrfs snapshots [--all]                        # merged only by default; --all 
 rbtrfs restore  <id|latest> --subvol /home --target DIR [--as-subvolume] [--host H | --any-host]
 rbtrfs ls       <id|latest> [path]
 rbtrfs dump     <id|latest> <path>                # one file to stdout
-rbtrfs forget   [--prune [--instant-delete]] [--dry-run]   # repository retention (root, run lock)
+rbtrfs forget   [--prune [--instant-delete --allow-unsafe]] [--dry-run]   # repository retention (root, run lock)
 rbtrfs gc       [--keep-local N] [--keep-local-days D] [--all-keys]   # local snapshots, incl. crashed-run orphans
 rbtrfs discover [--json]                        # detected filesystems/subvolumes; read-only
 ```

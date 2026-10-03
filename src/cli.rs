@@ -114,6 +114,11 @@ pub enum Command {
         /// repository right now.
         #[arg(long, requires = "prune")]
         instant_delete: bool,
+        /// Required together with --instant-delete: acknowledges that it bypasses
+        /// rustic's two-phase pruning and can corrupt the repository if anything
+        /// else is using it.
+        #[arg(long, requires = "instant_delete")]
+        allow_unsafe: bool,
         /// Show what would be forgotten, change nothing.
         #[arg(long)]
         dry_run: bool,
@@ -201,12 +206,41 @@ pub fn run(cli: Cli) -> Result<()> {
             let p = cli.load_profile(profile)?;
             crate::restore::dump(&p, snapshot, path, &host_filter(host, *any_host))
         }
-        Command::Forget { profile, prune, instant_delete, dry_run } => {
+        Command::Forget { profile, prune, instant_delete, allow_unsafe, dry_run } => {
             let p = cli.load_profile(profile)?;
+            if *instant_delete && !*allow_unsafe && !*dry_run {
+                use std::io::IsTerminal;
+                let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+                if !interactive {
+                    anyhow::bail!(
+                        "--instant-delete bypasses rustic's two-phase pruning and can corrupt the \
+                         repository if anything else uses it while it runs. Not running \
+                         interactively, so pass --allow-unsafe to confirm, or drop --instant-delete \
+                         (space is then freed by a later prune)"
+                    );
+                }
+                if !confirm_unsafe(&mut std::io::stdin().lock(), &mut std::io::stderr())? {
+                    anyhow::bail!("aborted");
+                }
+            }
             let _lock = crate::lock::acquire()?;
             crate::forget::run(&p, *prune, *instant_delete, *dry_run)
         }
     }
+}
+
+const UNSAFE_PROMPT: &str = "\
+--instant-delete bypasses rustic's two-phase pruning. If any other process (a backup on
+another host, restic, rustic) uses this repository while it runs, the repository can be
+corrupted. Type `yes` to continue: ";
+
+/// Ask on a terminal whether to proceed; only an exact `yes` confirms.
+fn confirm_unsafe(input: &mut impl std::io::BufRead, out: &mut impl std::io::Write) -> Result<bool> {
+    out.write_all(UNSAFE_PROMPT.as_bytes())?;
+    out.flush()?;
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    Ok(line.trim() == "yes")
 }
 
 fn host_filter(host: &Option<String>, any_host: bool) -> crate::restore::HostFilter {
@@ -315,4 +349,29 @@ fn print_json(filesystems: &[discover::BtrfsFilesystem], btrfs: &dyn crate::btrf
         })
         .collect();
     println!("{}", serde_json::to_string(&out).expect("json is serialisable"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ask(answer: &str) -> (bool, String) {
+        let mut out = Vec::new();
+        let ok = confirm_unsafe(&mut answer.as_bytes(), &mut out).unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn only_an_exact_yes_confirms() {
+        assert!(ask("yes\n").0);
+        assert!(ask("  yes  \n").0);
+        for no in ["y\n", "Yes\n", "no\n", "\n", ""] {
+            assert!(!ask(no).0, "{no:?} must not confirm");
+        }
+    }
+
+    #[test]
+    fn the_prompt_explains_the_risk() {
+        assert!(ask("no\n").1.contains("corrupted"));
+    }
 }

@@ -792,7 +792,10 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
     let restored = fx.restore("latest", a, "restored-marked");
     assert_eq!(files(&restored).len(), 3);
     // and instant delete really frees them
-    fx.ok(&["forget", "--prune", "--instant-delete"]);
+    let refused = fx.run(&["forget", "--prune", "--instant-delete"]);
+    assert!(!refused.status.success(), "--instant-delete must require --allow-unsafe");
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--allow-unsafe"), "{}", text(&refused));
+    fx.ok(&["forget", "--prune", "--instant-delete", "--allow-unsafe"]);
     fx.restic_check();
 
     // the newest backup is intact, and the next run still chains onto the kept parts
