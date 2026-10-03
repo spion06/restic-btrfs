@@ -14,9 +14,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{symlink, MetadataExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 
 mod container {
@@ -301,6 +301,19 @@ impl Fx {
     }
 }
 
+/// Poll `cond` for up to `secs` seconds.
+fn wait_until(secs: u64, what: &str, mut cond: impl FnMut() -> bool) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    while !cond() {
+        assert!(Instant::now() < end, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn kill(sig: &str, pid: u32) {
+    sh(&format!("kill -{sig} {pid}"));
+}
+
 fn list_dir(p: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(p)
         .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -488,6 +501,18 @@ fn second_run_is_incremental() {
     assert_eq!(parts[1]["parent"], parts[0]["id"], "chained to the previous run's part");
     let added = parts[1]["summary"]["data_added"].as_u64().unwrap();
     assert_eq!(added, 0, "unchanged data was re-read/re-added");
+
+    // merged snapshots form a chain too
+    let mut merged: Vec<&serde_json::Value> = snaps
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| !s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part"))
+        .collect();
+    merged.sort_by_key(|s| s["time"].as_str().unwrap().to_string());
+    assert_eq!(merged.len(), 2);
+    assert!(merged[0]["parent"].is_null(), "first merged snapshot has no parent");
+    assert_eq!(merged[1]["parent"], merged[0]["id"], "merged snapshots are chained");
 }
 
 #[test]
@@ -664,4 +689,271 @@ fn unmounted_nested_subvolume_is_warned_about() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("subvolume /@outer/vm is nested under a selected"), "{}", text(&out));
     assert!(!err.contains(".snap"), "read-only snapshots are not warned about:\n{err}");
+}
+
+// ---------------------------------------------------------------------------
+// ls / dump / restore --as-subvolume
+
+#[test]
+fn ls_and_dump_read_a_snapshot() {
+    e2e!();
+    let fx = Fx::new("lsdump", &["@a", "@b"]);
+    let (a, b) = (&fx.mounts[0], &fx.mounts[1]);
+    fs::create_dir_all(a.join("sub")).unwrap();
+    fs::write(a.join("sub/hello.txt"), b"hello dump").unwrap();
+    fs::write(b.join("other"), b"x").unwrap();
+    fx.ok(&["backup"]);
+
+    let all = fx.ok(&["ls", "latest"]);
+    for want in [format!("{}/sub/hello.txt", a.display()), format!("{}/other", b.display())] {
+        assert!(all.lines().any(|l| l.ends_with(&want)), "ls / lacks {want}:\n{all}");
+    }
+    let sub = fx.ok(&["ls", "latest", &a.to_string_lossy()]);
+    assert!(sub.contains(&format!("{}/sub/hello.txt", a.display())), "{sub}");
+    assert!(!sub.contains(&b.to_string_lossy().to_string()), "ls <path> is scoped:\n{sub}");
+    let line = sub.lines().find(|l| l.ends_with("/sub")).expect("sub dir listed");
+    assert!(line.starts_with('d'), "{line}");
+
+    let dumped = Command::new(env!("CARGO_BIN_EXE_rbtrfs"))
+        .env("RBTRFS_CONFIG", &fx.cfg)
+        .args(["dump", "latest", &format!("{}/sub/hello.txt", a.display())])
+        .output()
+        .unwrap();
+    assert!(dumped.status.success(), "{}", text(&dumped));
+    assert_eq!(dumped.stdout, b"hello dump");
+
+    let dir = fx.run(&["dump", "latest", &a.to_string_lossy()]);
+    assert!(!dir.status.success(), "dumping a directory is an error");
+}
+
+#[test]
+fn restore_as_subvolume_creates_a_real_subvolume() {
+    e2e!();
+    let fx = Fx::new("assubvol", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::create_dir_all(a.join("sub")).unwrap();
+    fs::write(a.join("sub/f.txt"), b"payload").unwrap();
+    fx.ok(&["backup"]);
+
+    // the top level of the test filesystem is mounted at <base>/mnt (btrfs)
+    let target = fx.base().join("mnt/restored-sv");
+    fx.ok(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &target.to_string_lossy()]);
+    sh(&format!("btrfs subvolume show '{}'", target.display())); // fails if not a subvolume
+    assert_eq!(fs::read(target.join("sub/f.txt")).unwrap(), b"payload");
+
+    // refuses to overwrite, and a non-btrfs target fails without leaving anything
+    let again = fx.run(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &target.to_string_lossy()]);
+    assert!(!again.status.success());
+    let plain = std::env::temp_dir().join("rbtrfs-it-assubvol-not-btrfs");
+    let _ = fs::remove_dir_all(&plain);
+    let out = fx.run(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &plain.to_string_lossy()]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(!plain.exists(), "no leftover after a failed --as-subvolume");
+}
+
+// ---------------------------------------------------------------------------
+// repository retention
+
+#[test]
+fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
+    e2e!();
+    let fx = Fx::new("forget", &["@a"]);
+    let a = &fx.mounts[0];
+    for i in 0..3 {
+        fs::write(a.join(format!("gen{i}.bin")), vec![i as u8 + 1; 100_000]).unwrap();
+        fx.ok(&["backup"]);
+        std::thread::sleep(Duration::from_millis(1100)); // run ids have 1s resolution
+    }
+    let count = |fx: &Fx, part: bool| -> usize {
+        let v: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+        v.as_array().unwrap().iter()
+            .filter(|s| s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part") == part)
+            .count()
+    };
+    assert_eq!((count(&fx, false), count(&fx, true)), (3, 3));
+
+    // no policy configured: refuse
+    let out = fx.run(&["forget"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("retention"), "{}", text(&out));
+
+    fx.write_cfg(&fx.mounts.clone(), "keep_local = 1\n[profile.default.retention]\nkeep_last = 1\n");
+    // dry run changes nothing
+    let dry = fx.ok(&["forget", "--dry-run"]);
+    assert!(dry.contains("forget 2"), "{dry}");
+    assert_eq!((count(&fx, false), count(&fx, true)), (3, 3));
+
+    fx.ok(&["forget", "--prune", "--instant-delete"]);
+    assert_eq!((count(&fx, false), count(&fx, true)), (1, 1), "newest merged + its parts");
+    fx.restic_check();
+
+    // the newest backup is intact, and the next run still chains onto the kept parts
+    let restored = fx.restore("latest", a, "restored");
+    assert_eq!(files(&restored).len(), 3);
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.ok(&["backup"]);
+    let v: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+    let newest_part = v.as_array().unwrap().iter()
+        .filter(|s| s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part"))
+        .max_by_key(|s| s["time"].as_str().unwrap().to_string())
+        .unwrap();
+    assert!(newest_part["parent"].is_string(), "incremental chain survived forget");
+    fx.restic_check();
+}
+
+#[test]
+fn local_retention_by_age() {
+    e2e!();
+    let fx = Fx::new("keepdays", &["@a"]);
+    let a = &fx.mounts[0];
+    fx.write_cfg(&fx.mounts.clone(), "keep_local = 1\nkeep_local_days = 1\n");
+    for _ in 0..3 {
+        fx.ok(&["backup"]);
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+    // all three are younger than a day: nothing is collected despite keep_local = 1
+    assert_eq!(fx.local_runs(a).len(), 3);
+    fx.ok(&["gc"]);
+    assert_eq!(fx.local_runs(a).len(), 3);
+    // overriding the age to 0 days falls back to the count
+    fx.ok(&["gc", "--keep-local-days", "0"]);
+    assert_eq!(fx.local_runs(a).len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// signals, crashes, concurrent writers
+
+#[test]
+fn termination_signals_wait_for_post_hooks() {
+    e2e!();
+    let fx = Fx::new("signals", &["@a"]);
+    let a = &fx.mounts[0];
+    let spawn = |fx: &Fx| fx.cmd(&["backup"]).stderr(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+
+    // (1) SIGTERM during a slow pre-hook: no snapshot, but the post-hook still runs
+    let marker1 = fx.base().join("post-ran-1");
+    fx.write_cfg(&fx.mounts.clone(), &format!(
+        "[profile.default.hooks]\npre = [\"sleep 3\"]\npost = [\"touch '{}'\"]\n", marker1.display()));
+    let child = spawn(&fx);
+    std::thread::sleep(Duration::from_millis(1200));
+    kill("TERM", child.id());
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("interrupted"), "{}", text(&out));
+    assert!(marker1.exists(), "post-hook must run although we were signalled");
+    assert!(fx.local_runs(a).is_empty(), "no snapshot after an interrupt before the burst");
+
+    // (2) SIGTERM during a slow post-hook: every post-hook still runs
+    let marker2 = fx.base().join("post-ran-2");
+    fx.write_cfg(&fx.mounts.clone(), &format!(
+        "[profile.default.hooks]\npost = [\"sleep 3\", \"touch '{}'\"]\n", marker2.display()));
+    let child = spawn(&fx);
+    wait_until(20, "the snapshot", || !fx.local_runs(a).is_empty());
+    kill("TERM", child.id());
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(marker2.exists(), "later post-hooks must still run:\n{}", text(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("after snapshot"), "{}", text(&out));
+}
+
+#[test]
+fn sigkill_mid_run_leaks_no_mounts_and_gc_reclaims_the_snapshots() {
+    e2e!();
+    let fx = Fx::new("sigkill", &["@a"]);
+    let a = &fx.mounts[0];
+    // a slow post-hook keeps the run alive after the burst
+    fx.write_cfg(&fx.mounts.clone(), "[profile.default.hooks]\npost = [\"sleep 3\"]\n");
+    let mounts_before = host_mounts();
+
+    let mut child = fx.cmd(&["backup"]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    wait_until(20, "the snapshot", || !fx.local_runs(a).is_empty());
+    child.kill().unwrap(); // SIGKILL
+    child.wait().unwrap();
+
+    assert_eq!(mounts_before, host_mounts(), "SIGKILL leaked a mount into the host namespace");
+    assert_eq!(fx.local_runs(a).len(), 1, "the orphaned snapshot persists on disk");
+    // the orphaned hook keeps the (private) namespace alive for its remaining
+    // seconds; let it finish so teardown can unmount cleanly
+    std::thread::sleep(Duration::from_millis(3500));
+
+    // the run lock died with the process, and gc reclaims the orphan
+    fx.ok(&["gc", "--keep-local", "0"]);
+    assert!(fx.local_runs(a).is_empty());
+    assert_eq!(mounts_before, host_mounts());
+}
+
+/// A file whose content proves its own integrity: `<len>:<fnv64>\n<body>`.
+fn fnv(data: &[u8]) -> u64 {
+    data.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
+}
+
+fn write_valid(path: &Path, seed: u64) {
+    let body: Vec<u8> = (0..300_000u64).map(|i| (i.wrapping_mul(seed | 1) >> 3) as u8).collect();
+    let mut content = format!("{}:{:016x}\n", body.len(), fnv(&body)).into_bytes();
+    content.extend_from_slice(&body);
+    let tmp = path.with_file_name(format!(".{}.tmp", path.file_name().unwrap().to_string_lossy()));
+    fs::write(&tmp, content).unwrap();
+    fs::rename(&tmp, path).unwrap(); // readers (and snapshots) see old or new, never half
+}
+
+fn is_valid(bytes: &[u8]) -> bool {
+    let Some(nl) = bytes.iter().position(|b| *b == b'\n') else { return false };
+    let Ok(header) = std::str::from_utf8(&bytes[..nl]) else { return false };
+    let Some((len, sum)) = header.split_once(':') else { return false };
+    let body = &bytes[nl + 1..];
+    len.parse::<usize>().ok() == Some(body.len()) && u64::from_str_radix(sum, 16).ok() == Some(fnv(body))
+}
+
+#[test]
+fn files_are_individually_intact_while_writers_churn_two_subvolumes() {
+    e2e!();
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fx::new("churn", &["@a", "@b"]);
+    let dirs = [fx.mounts[0].clone(), fx.mounts[1].clone()];
+    for d in &dirs {
+        for f in 0..8 {
+            write_valid(&d.join(format!("f{f}")), 1);
+        }
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let rounds = Arc::new(AtomicU64::new(0));
+    let writer = {
+        let (stop, rounds, dirs) = (stop.clone(), rounds.clone(), dirs.clone());
+        std::thread::spawn(move || {
+            let mut i = 2;
+            while !stop.load(Ordering::Relaxed) {
+                // alternate between the two subvolumes as fast as possible
+                for f in 0..8 {
+                    for d in &dirs {
+                        write_valid(&d.join(format!("f{f}")), i);
+                    }
+                }
+                i += 1;
+                rounds.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    };
+    for _ in 0..3 {
+        fx.ok(&["backup"]);
+    }
+    stop.store(true, Ordering::Relaxed);
+    writer.join().unwrap();
+    assert!(rounds.load(Ordering::Relaxed) > 3, "the writer must actually have raced the backups");
+
+    // Per-file integrity is what btrfs snapshots guarantee. Which *generation* of
+    // each file lands in each subvolume is NOT asserted: the two snapshots are
+    // taken microseconds apart, not atomically. In-flight `.tmp` files may be
+    // captured part-written and are ignored; final names must be whole.
+    for (i, d) in dirs.iter().enumerate() {
+        let restored = files(&fx.restore("latest", d, &format!("restored-{i}")));
+        let finals: Vec<_> = restored.iter().filter(|(k, _)| !k.starts_with('.')).collect();
+        assert_eq!(finals.len(), 8, "every file present in {}", d.display());
+        for (name, bytes) in finals {
+            assert!(is_valid(bytes), "{name} in {} is torn or corrupt", d.display());
+        }
+    }
+    fx.restic_check();
 }

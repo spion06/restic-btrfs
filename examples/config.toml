@@ -9,6 +9,14 @@ subvolumes = ["/", "/home", "/srv"]
 exclude = ["**/.cache", "*.tmp"]
 tags = ["rbtrfs", "nightly"]
 keep_local = 2
+keep_local_days = 3
+
+# `rbtrfs forget` thins the repository with this policy (required by that command).
+[profile.default.retention]
+keep_last = 3
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
 
 [profile.default.hooks]
 pre = []

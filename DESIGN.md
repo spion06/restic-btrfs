@@ -183,7 +183,8 @@ restic-btrfs/
     lock.rs              # host-wide run lock (flock in /run/rbtrfs)
     repo.rs              # open / init a rustic_core repository
     backup.rs            # the backup run
-    restore.rs           # `snapshots` listing and `restore`
+    restore.rs           # `snapshots`, `ls`, `dump`, `restore`
+    forget.rs            # repository retention: merged snapshots by policy, stale parts
     runid.rs             # UTC run ids, no date crate
   spikes/                # Milestone 0 proofs (cargo run --example spike_*)
   tests/e2e_loopback.rs  # loopback-btrfs end-to-end tests (containerised when not root)
@@ -194,12 +195,13 @@ restic-btrfs/
 ```
 rbtrfs backup   [--profile P] [--dry-run]       # --dry-run needs no root
 rbtrfs snapshots [--all]                        # merged only by default; --all shows parts
-rbtrfs restore  <id|latest> --subvol /home --target DIR [--host H | --any-host]
-rbtrfs gc       [--keep-local N] [--all-keys]   # local btrfs snapshots, incl. crashed-run orphans
+rbtrfs restore  <id|latest> --subvol /home --target DIR [--as-subvolume] [--host H | --any-host]
+rbtrfs ls       <id|latest> [path]
+rbtrfs dump     <id|latest> <path>                # one file to stdout
+rbtrfs forget   [--prune [--instant-delete]] [--dry-run]   # repository retention (root, run lock)
+rbtrfs gc       [--keep-local N] [--keep-local-days D] [--all-keys]   # local snapshots, incl. crashed-run orphans
 rbtrfs discover [--json]                        # detected filesystems/subvolumes; read-only
 ```
-
-`ls`/`dump` are not implemented yet.
 
 Config is TOML with named profiles: repository + credentials, subvolume selection, staging mode and
 name, excludes, tags, hooks, local-snapshot retention. Retention/prune of the *restic repo* and
@@ -285,11 +287,14 @@ parallel. As root (CI) they run directly and serially.
 - Unit tests (no root) cover mountinfo/discovery, selection, key escaping, exclude translation against
   the real matcher, and the burst and GC against a fake `BtrfsOps`.
 
-Still TODO:
-- **Consistency probe:** a writer churning files across two subvolumes during a run; assert every
-  restored file is individually intact (per-file atomicity is guaranteed; cross-subvolume ordering is
-  not, and the test should say so rather than assert atomicity the filesystem cannot provide).
-- **SIGKILL leak check:** namespace/mount leak after `SIGKILL` mid-run (normal runs are covered).
+- **Consistency probe** — writers churn files (atomic rename) across two subvolumes while three
+  backups run; every restored file is individually intact. Cross-subvolume generation is deliberately
+  not asserted: the snapshots are microseconds apart, not atomic. (Checked to fail with in-place
+  writes, which can be torn.)
+- **Signals / crashes** — SIGTERM during a pre-hook and during a post-hook still runs every post-hook;
+  `SIGKILL` mid-run leaves the host mount table byte-identical, the snapshots survive on disk, the run
+  lock dies with the process, and `gc` reclaims them.
+- **Repository retention, `ls`, `dump`, `--as-subvolume`**, and merged-snapshot lineage.
 
 ## Open items
 
@@ -301,12 +306,22 @@ Resolved in implementation:
 - Unmounted nested subvolumes are not auto-selected; mounted-but-unselected nested subvolumes get a
   warning.
 
+Resolved since v0:
+- Age-based local retention: `keep_local_days` keeps any set younger than N days in addition to the
+  newest `keep_local`.
+- Repository retention: `rbtrfs forget [--prune]` applies a `[retention]` policy to merged snapshots
+  (per host) and drops part snapshots older than the newest run; foreign snapshots are never touched.
+  It runs under the same host-wide lock as `backup`.
+- `ls` and `dump`.
+- `restore --as-subvolume` creates the target as a btrfs subvolume (nested subvolumes come back as
+  plain directories).
+- Merged snapshots now carry `parent` = the previous merged snapshot of the host, so listings show
+  lineage. (Parts still drive incremental detection.)
+
 Still open:
-- `keep_local` is a count of run-id sets per key; no age-based policy yet.
-- No repo-side `forget`/`prune`. Run `rustic`/`restic forget` separately, and not while a backup runs.
-- `restore` writes plain files as the invoking user (root); it does not recreate a btrfs subvolume
-  or preserve the subvolume boundary.
-- Concurrency: rbtrfs serialises its own runs with a host-wide `flock`, but rustic_core 0.13 writes no
-  restic repository lock, so a concurrent `restic prune` is not excluded.
-- Merged snapshots have `parent = none`; only the parts chain. Fine for dedup, but
-  `snapshots` on the merged view shows no lineage.
+- No restic repository lock: rustic_core 0.13 has no API to write one (`FileType` has no lock type), so
+  rbtrfs cannot exclude a *different* tool's prune. Its own backups/gc/forget are serialised by the
+  host-wide `flock`.
+- A FUSE/mountable restore view.
+- `forget --prune --instant-delete` is only safe if nothing else uses the repository; the default
+  (rustic's delayed deletion) is safe but frees space on a later prune.

@@ -22,12 +22,15 @@ v1 milestones 0–4 implemented and tested end-to-end against official restic 0.
 | `rbtrfs discover` | show detected btrfs filesystems, mounts, and subvolumes (read-only) |
 | `rbtrfs backup [--profile P] [--dry-run]` | snapshot burst → per-subvol backup → merge → local-snapshot GC (`--dry-run` needs no root) |
 | `rbtrfs snapshots [--all]` | list merged snapshots (`--all` also shows the per-subvol parts) |
-| `rbtrfs restore <id\|latest> --subvol /home --target DIR [--host H \| --any-host]` | restore one subvolume into a directory; `latest` = newest merged snapshot from this host |
-| `rbtrfs gc [--keep-local N] [--all-keys]` | delete local btrfs snapshots left by past or crashed runs |
+| `rbtrfs restore <id\|latest> --subvol /home --target DIR [--as-subvolume] [--host H \| --any-host]` | restore one subvolume into a directory (or, with `--as-subvolume`, into a new btrfs subvolume); `latest` = newest merged snapshot from this host |
+| `rbtrfs ls <id\|latest> [PATH]` | list a snapshot's contents |
+| `rbtrfs dump <id\|latest> PATH` | write one file from a snapshot to stdout |
+| `rbtrfs forget [--prune [--instant-delete]] [--dry-run]` | apply the profile's `[retention]` to the repository (needs root: takes the run lock) |
+| `rbtrfs gc [--keep-local N] [--keep-local-days D] [--all-keys]` | delete local btrfs snapshots left by past or crashed runs |
 
-Not yet: restic-repo retention/`forget --prune`, `ls`/`dump`, systemd units, a
-mountable restore view. Restoring writes plain files; it does not recreate btrfs
-subvolumes.
+Not yet: systemd units and a mountable (FUSE) restore view. Restores write plain
+files; `--as-subvolume` makes the restore target a btrfs subvolume, but subvolumes
+that were nested inside it come back as plain directories.
 
 ## Requirements
 
@@ -47,6 +50,14 @@ subvolumes       = ["/home", "/srv", "/var/log"]   # mount points: exact paths o
 exclude          = ["**/.cache", "**/node_modules", "/home/alice/Downloads"]
 tags             = ["rbtrfs"]
 keep_local       = 1                          # local snapshot sets kept per subvolume
+keep_local_days  = 3                          # ...and any set younger than this (optional)
+
+[profile.default.retention]                   # used by `rbtrfs forget`
+keep_last    = 3
+keep_daily   = 7
+keep_weekly  = 4
+keep_monthly = 12
+keep_within  = "14d"
 
 [profile.default.hooks]
 pre        = ["systemctl stop mydb"]
@@ -71,8 +82,19 @@ select. Read-only nested subvolumes (snapper snapshots) are not warned about.
 - do not prefix patterns with `!`.
 
 **`keep_local`** is how many local read-only snapshot sets to keep per subvolume
-(handy for fast local rollback). Incremental backups do **not** depend on them:
-the previous run is found through the repository.
+(handy for fast local rollback); with `keep_local_days`, sets younger than that
+are kept too. Incremental backups do **not** depend on them: the previous run is
+found through the repository.
+
+**`[retention]`** thins the repository with `rbtrfs forget` (restic semantics:
+`keep_last/hourly/daily/weekly/monthly/yearly`, `keep_within`), per host, over
+the merged snapshots rbtrfs wrote. The per-subvolume *part* snapshots only exist
+to make the next run incremental, so forget keeps just those of the newest run.
+Snapshots with other labels (your own restic jobs) are never touched. Without a
+`[retention]` table `forget` refuses to do anything. `--prune` also frees the data
+nothing references any more; by default rustic marks it for deletion and removes
+it on a later prune, `--instant-delete` removes it now (only if nothing else is
+using the repository).
 
 **Staging.** `staging` defaults to `"top-level"` (snapshots under
 `<subvolid=5>/.rbtrfs-snapshots/`, reached by a transient mount inside a private
@@ -101,12 +123,13 @@ they have finished, so a stopped service is not left stopped.
 
 ## Concurrency and repository maintenance
 
-rbtrfs takes a host-wide lock (`/run/rbtrfs/rbtrfs.lock`) so only one `backup` or
-`gc` runs at a time. It does **not** take restic's repository lock (rustic_core
-0.13 doesn't write one). Therefore **do not run `restic forget --prune` /
-`rustic prune` while a backup is running** — a prune can remove data a running
-backup is about to reference. Schedule them apart (for example, in the same
-systemd unit after `rbtrfs backup`).
+rbtrfs takes a host-wide lock (`/run/rbtrfs/rbtrfs.lock`) so only one `backup`,
+`gc` or `forget` runs at a time — which is also what makes `rbtrfs forget --prune`
+safe against rbtrfs's own backups. It does **not** take restic's repository lock
+(rustic_core 0.13 has no API to write one), so it cannot exclude a *different*
+tool: do not run `restic forget --prune` / `rustic prune` while a backup is
+running. Prefer `rbtrfs forget --prune`, or schedule other maintenance apart from
+backups.
 
 ## Tests
 
@@ -125,9 +148,11 @@ When run as root (`sudo -E cargo test`, or in CI) they run directly, serially,
 and need `mkfs.btrfs`, `losetup`, `setfattr`/`getfattr` and `restic` on `PATH`.
 
 They cover snapshot isolation, excludes, metadata fidelity (mode, owner, mtime,
-symlinks, xattrs), incremental parents, local GC, hook failure handling, the run
-lock, in-subvolume staging, nested subvolumes, and an official `restic check
---read-data` of the repository rbtrfs wrote.
+symlinks, xattrs), incremental parents, local and repository retention, hook
+failure and signal handling, SIGKILL mid-run (no leaked mounts, GC reclaims the
+orphans), files staying individually intact while writers churn two subvolumes,
+the run lock, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
+and an official `restic check --read-data` of the repository rbtrfs wrote.
 
 ## Development spikes
 
