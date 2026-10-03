@@ -319,9 +319,21 @@ Resolved since v0:
   lineage. (Parts still drive incremental detection.)
 
 Still open:
-- No restic repository lock: rustic_core 0.13 has no API to write one (`FileType` has no lock type), so
-  rbtrfs cannot exclude a *different* tool's prune. Its own backups/gc/forget are serialised by the
-  host-wide `flock`.
+- No restic repository lock: rustic_core 0.13 has no API to write one (`FileType` has no lock type;
+  upstream describes rustic as lock-free by design). rbtrfs' own backup/gc/forget are serialised by a
+  host-wide `flock`. Investigated against the library's design and empirically (see the e2e tests):
+  - rustic prune is safe concurrent with backups by design (two-phase: unneeded packs are marked, only
+    deleted after `keep_delete`, and packs found to be used again are recovered). Held with default
+    options and with `keep_delete = 0` over repeated runs of ~65 forget+prune rounds against backups.
+  - Marked packs live in a rustic-only index field (`packs_to_delete`); official restic accepts the
+    repository in that state (`restic check --read-data`).
+  - `--instant-delete` removes that safety: reproduced a backup crashing inside rustic_core.
+  - **restic's own prune is not safe concurrently with a backup**: reproduced a repository with a
+    missing tree pack (`restic check` fails) while the backup exited 0. restic's protection is its lock
+    file, which rustic_core cannot write. Writing it ourselves would need the repository key and the
+    encrypted lock format, neither exposed by the library.
+  Possible follow-up: verify the new merged snapshot's trees are readable at the end of a backup, so
+  such damage is at least reported by the run that suffered it.
 - A FUSE/mountable restore view.
 - `forget --prune --instant-delete` is only safe if nothing else uses the repository; the default
   (rustic's delayed deletion) is safe but frees space on a later prune.

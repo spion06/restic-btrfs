@@ -122,6 +122,12 @@ pub fn run(profile: &Profile, prune: bool, instant_delete: bool, dry_run: bool) 
         repo.delete_snapshots(&ids).context("removing snapshots")?;
     }
     if prune {
+        if instant_delete {
+            eprintln!(
+                "rbtrfs: warning: --instant-delete skips rustic's two-phase pruning; make sure no \
+                 other process (backup, restic, rustic) is using this repository"
+            );
+        }
         let opts = PruneOptions::default().instant_delete(instant_delete);
         let prune_plan = repo.prune_plan(&opts).context("planning prune")?;
         repo.prune(&opts, prune_plan).context("pruning")?;

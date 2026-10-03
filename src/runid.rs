@@ -29,7 +29,8 @@ pub fn to_unix(id: &str) -> Option<u64> {
     (days * 86400 + h * 3600 + mi * 60 + s).try_into().ok()
 }
 
-fn from_unix(secs: u64) -> String {
+/// `YYYYMMDDThhmmssZ` for the given unix time.
+pub fn from_unix(secs: u64) -> String {
     let days = (secs / 86400) as i64;
     let rem = secs % 86400;
     let (y, mo, d) = civil_from_days(days);
@@ -75,6 +76,15 @@ mod tests {
         let id = from_unix(secs);
         assert_eq!(id, "20260902T231500Z");
         assert_eq!(to_unix(&id), Some(secs));
+    }
+
+    #[test]
+    fn consecutive_seconds_give_distinct_sortable_ids() {
+        let a = from_unix(1_788_390_899);
+        let b = from_unix(1_788_390_900);
+        assert_ne!(a, b);
+        assert!(a < b, "ids sort chronologically");
+        assert_eq!(a, "20260902T231459Z");
     }
 
     #[test]

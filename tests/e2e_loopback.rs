@@ -783,8 +783,16 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
     assert!(dry.contains("forget 2"), "{dry}");
     assert_eq!((count(&fx, false), count(&fx, true)), (3, 3));
 
-    fx.ok(&["forget", "--prune", "--instant-delete"]);
+    // default prune: rustic only *marks* unneeded packs (a rustic-specific index
+    // field) and deletes them on a later prune; official restic must still accept it
+    fx.ok(&["forget", "--prune"]);
     assert_eq!((count(&fx, false), count(&fx, true)), (1, 1), "newest merged + its parts");
+    fx.restic_check();
+    fx.restic(&["snapshots"]);
+    let restored = fx.restore("latest", a, "restored-marked");
+    assert_eq!(files(&restored).len(), 3);
+    // and instant delete really frees them
+    fx.ok(&["forget", "--prune", "--instant-delete"]);
     fx.restic_check();
 
     // the newest backup is intact, and the next run still chains onto the kept parts
@@ -956,4 +964,115 @@ fn files_are_individually_intact_while_writers_churn_two_subvolumes() {
         }
     }
     fx.restic_check();
+}
+
+/// What an *external* rustic user does: forget all but the newest run, then prune
+/// with default (two-phase, delayed-deletion) options, in a loop. It uses the
+/// library directly, so it does NOT take rbtrfs' run lock.
+fn external_rustic_forget_and_prune(repo: PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> std::thread::JoinHandle<(u32, Vec<String>)> {
+    use rustic_core::{ConfigOptions, Credentials, PruneOptions, Repository, RepositoryOptions};
+    std::thread::spawn(move || {
+        let backends = rustic_backend::BackendOptions::default()
+            .repository(repo.to_string_lossy())
+            .to_backends()
+            .unwrap();
+        let creds = Credentials::password("pw");
+        let keep = rbtrfs::config::Retention { keep_last: Some(1), ..Default::default() }
+            .to_keep_options()
+            .unwrap();
+        let _ = ConfigOptions::default();
+        let (mut rounds, mut errors) = (0, Vec::new());
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let attempt = || -> Result<(), String> {
+                let repo = Repository::new(&RepositoryOptions::default(), &backends)
+                    .map_err(|e| e.to_string())?
+                    .open(&creds)
+                    .map_err(|e| e.to_string())?;
+                let snaps = repo.get_all_snapshots().map_err(|e| e.to_string())?;
+                let plan = rbtrfs::forget::plan(snaps, &keep).map_err(|e| format!("{e:#}"))?;
+                let ids: Vec<_> = plan.forget_merged.into_iter().chain(plan.forget_parts).collect();
+                if !ids.is_empty() {
+                    repo.delete_snapshots(&ids).map_err(|e| e.to_string())?;
+                }
+                let opts = PruneOptions::default();
+                let pp = repo.prune_plan(&opts).map_err(|e| e.to_string())?;
+                repo.prune(&opts, pp).map_err(|e| e.to_string())
+            };
+            match attempt() {
+                Ok(()) => rounds += 1,
+                Err(e) => errors.push(e),
+            }
+        }
+        (rounds, errors)
+    })
+}
+
+#[test]
+fn external_rustic_forget_and_prune_during_backups_does_not_corrupt() {
+    e2e!();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fx::new("extprune", &["@a", "@b"]);
+    let dirs = [fx.mounts[0].clone(), fx.mounts[1].clone()];
+    let churn = |round: u64| {
+        for d in &dirs {
+            for f in 0..6 {
+                write_valid(&d.join(format!("f{f}")), round * 7 + f);
+            }
+        }
+    };
+    churn(1);
+    fx.ok(&["backup"]); // repository exists before the pruner starts
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let pruner = external_rustic_forget_and_prune(fx.repo(), stop.clone());
+    for round in 2..8 {
+        churn(round);
+        fx.ok(&["backup"]); // must keep succeeding while the pruner hammers the repo
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let (rounds, errors) = pruner.join().unwrap();
+    eprintln!("external pruner: {rounds} successful rounds, {} errors: {errors:#?}", errors.len());
+    assert!(rounds >= 3, "the pruner must really have raced the backups");
+
+    // The repository is intact for official restic, and the newest backup restores.
+    fx.restic_check();
+    for (i, d) in dirs.iter().enumerate() {
+        let restored = files(&fx.restore("latest", d, &format!("restored-{i}")));
+        let finals: Vec<_> = restored.iter().filter(|(k, _)| !k.starts_with('.')).collect();
+        assert_eq!(finals.len(), 6);
+        assert!(finals.iter().all(|(_, b)| is_valid(b)), "restored data corrupt after concurrent prune");
+    }
+}
+
+#[test]
+fn official_restic_backups_during_rustic_prune_stay_intact() {
+    e2e!();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fx::new("resticprune", &["@a"]);
+    fs::write(fx.mounts[0].join("seed"), b"x").unwrap();
+    fx.ok(&["backup"]); // creates the repository
+
+    let data = fx.base().join("restic-data");
+    fs::create_dir_all(&data).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let pruner = external_rustic_forget_and_prune(fx.repo(), stop.clone());
+    for round in 1..7 {
+        for f in 0..6 {
+            write_valid(&data.join(format!("f{f}")), round * 11 + f);
+        }
+        fx.restic(&["backup", &data.to_string_lossy()]);
+    }
+    stop.store(true, Ordering::Relaxed);
+    let (rounds, errors) = pruner.join().unwrap();
+    eprintln!("rustic pruner: {rounds} rounds, {} errors: {errors:#?}", errors.len());
+    assert!(rounds >= 3);
+
+    fx.restic_check();
+    let out = fx.base().join("restic-restore");
+    fx.restic(&["restore", "latest", "--target", &out.to_string_lossy(), "--path", &data.to_string_lossy()]);
 }

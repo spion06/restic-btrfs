@@ -47,14 +47,31 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     let _lock = lock::acquire()?;
 
     // Prepare staging for every filesystem, then plan every snapshot job, so the
-    // burst covers all subvolumes with no I/O interleaved.
-    let mut staged: Vec<(StagingArea, Vec<SnapJob>)> = Vec::new();
-    for sel in &resolution.selections {
-        let area = StagingArea::prepare(sel.fs, profile, &sel.selected)
-            .with_context(|| format!("preparing staging for {}", sel.fs.source))?;
-        let jobs = area.plan(&sel.selected, &run_id, profile);
-        staged.push((area, jobs));
-    }
+    // burst covers all subvolumes with no I/O interleaved. Run ids have one-second
+    // resolution: if a previous run in this very second left its snapshots behind,
+    // move on to the next free second instead of colliding with them.
+    let areas = resolution
+        .selections
+        .iter()
+        .map(|sel| {
+            StagingArea::prepare(sel.fs, profile, &sel.selected)
+                .with_context(|| format!("preparing staging for {}", sel.fs.source))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut secs = runid::now_unix();
+    let (run_id, planned) = loop {
+        let id = runid::from_unix(secs);
+        let planned: Vec<Vec<SnapJob>> = areas
+            .iter()
+            .zip(&resolution.selections)
+            .map(|(area, sel)| area.plan(&sel.selected, &id, profile))
+            .collect();
+        if planned.iter().flatten().all(|j| !j.dest.exists()) {
+            break (id, planned);
+        }
+        secs += 1;
+    };
+    let staged: Vec<(StagingArea, Vec<SnapJob>)> = areas.into_iter().zip(planned).collect();
     let all_jobs: Vec<SnapJob> = staged.iter().flat_map(|(_, j)| j.clone()).collect();
 
     // Fail on a bad repository/password/excludes BEFORE quiescing anything.

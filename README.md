@@ -124,12 +124,24 @@ they have finished, so a stopped service is not left stopped.
 ## Concurrency and repository maintenance
 
 rbtrfs takes a host-wide lock (`/run/rbtrfs/rbtrfs.lock`) so only one `backup`,
-`gc` or `forget` runs at a time — which is also what makes `rbtrfs forget --prune`
-safe against rbtrfs's own backups. It does **not** take restic's repository lock
-(rustic_core 0.13 has no API to write one), so it cannot exclude a *different*
-tool: do not run `restic forget --prune` / `rustic prune` while a backup is
-running. Prefer `rbtrfs forget --prune`, or schedule other maintenance apart from
-backups.
+`gc` or `forget` runs at a time; that makes `rbtrfs forget --prune` safe against
+rbtrfs's own backups.
+
+rustic_core has no restic-style repository lock (it is lock-free by design and
+cannot write restic's lock files), so what is safe *alongside* a running backup
+depends on which tool touches the repository:
+
+| concurrent with a running `rbtrfs backup` | safe? |
+|---|---|
+| `rbtrfs forget [--prune]` / `rbtrfs gc` / another `rbtrfs backup` | yes — refused by the run lock |
+| `rustic` forget/prune with default options | yes by design: two-phase pruning only *marks* unneeded packs and deletes them after `keep_delete` (23h), recovering any that turn out to be used. Exercised in the tests, also with `keep_delete` set to 0 |
+| `restic backup` / readers (`restore`, `ls`, `check`) | yes (tested against a pruning rustic) |
+| **`restic forget --prune` / `restic prune`** | **no.** restic relies on locks that rbtrfs cannot take, so its prune can delete packs an in-flight backup has written but not yet indexed. Reproduced: `restic check` reported a missing pack while the backup had exited 0 |
+| **`--instant-delete`** (`rbtrfs forget` or `rustic prune`) | **no.** It skips the two-phase safety. Reproduced: a concurrent backup crashed inside rustic_core |
+
+So: prune with `rbtrfs forget --prune` (or rustic), never with restic's own prune
+while backups can run; and only use `--instant-delete` when nothing else is
+touching the repository.
 
 ## Tests
 
@@ -151,7 +163,7 @@ They cover snapshot isolation, excludes, metadata fidelity (mode, owner, mtime,
 symlinks, xattrs), incremental parents, local and repository retention, hook
 failure and signal handling, SIGKILL mid-run (no leaked mounts, GC reclaims the
 orphans), files staying individually intact while writers churn two subvolumes,
-the run lock, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
+the run lock, repository safety against a concurrent rustic prune, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
 and an official `restic check --read-data` of the repository rbtrfs wrote.
 
 ## Development spikes
