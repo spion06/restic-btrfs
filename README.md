@@ -2,202 +2,174 @@
 
 Consistent btrfs-snapshot backups into a **restic-format** repository.
 
-`rbtrfs backup` snapshots every selected btrfs subvolume in one tight burst (one
-consistent point in time), then backs those read-only snapshots up as a **single
-restic snapshot** whose tree holds each subvolume at its real mount path. No FUSE,
-no bind mounts: the read side uses a private mount namespace for the transient
-top-level-subvolume mount, and rustic_core's `as_path` records the original path.
+`rbtrfs backup` snapshots every selected btrfs subvolume back-to-back, then backs the
+read-only snapshots up as **one restic snapshot** with each subvolume at its real
+mount path (`/home`, `/srv`, …). The repository is plain restic: `restic` and
+`rustic` read it directly.
 
-The repository is plain restic — `restic`, `rustic`, and every restic backend
-(local, sftp, REST, S3, B2, …) work against it directly.
+## How it works
 
-See `DESIGN.md` for the architecture and the decisions behind it.
+1. Run `pre` hooks (e.g. quiesce a database).
+2. Create a read-only snapshot of every selected subvolume in one tight burst
+   (about 2 ms per subvolume), then run `post` hooks.
+3. Back up each snapshot with [rustic_core](https://github.com/rustic-rs/rustic_core),
+   recording the original mount point instead of the staging path, so paths stay
+   stable and unchanged files are never re-read.
+4. Merge the per-subvolume results into a single snapshot and delete old local
+   snapshots.
 
-## Status
+The snapshots live under the filesystem's top-level subvolume, which rbtrfs mounts
+inside a **private mount namespace**: nothing is added to your host's mount table,
+and the kernel cleans up even if the process is killed. No FUSE, no bind mounts.
 
-v1 milestones 0–4 implemented and tested end-to-end against official restic 0.18:
+btrfs has no atomic multi-subvolume snapshot, so cross-subvolume ordering is not
+guaranteed (per-file integrity is). Use hooks to quiesce anything that needs more.
 
-| command | what it does |
+## Install
+
+```
+cargo install --path .        # Rust >= 1.91
+```
+
+Build needs the btrfs-progs headers (`libbtrfsutil`), `pkg-config` and libclang;
+runtime needs `libbtrfsutil` and, for `repository_mount`, `mount(8)`.
+
+## Quick start
+
+```toml
+# /etc/rbtrfs/config.toml   (mode 0600 if it holds a password)
+[profile.default]
+repository       = "/mnt/backup/restic"
+password_file    = "/etc/rbtrfs/repo.pw"      # or password / password_command
+subvolumes       = ["/", "/home", "/srv"]     # mount points; globs allowed
+exclude          = ["**/.cache", "*.tmp", "/home/alice/Downloads"]
+keep_local       = 1                          # local snapshot sets to keep
+```
+
+```
+rbtrfs discover                  # what rbtrfs sees; copy mount points from here
+rbtrfs backup --dry-run          # check the plan (no root needed)
+sudo rbtrfs backup               # the first run initialises the repository
+rbtrfs snapshots                 # list backups
+sudo rbtrfs restore latest --subvol /home --target /mnt/restore
+```
+
+## Commands
+
+| command | purpose |
 |---|---|
-| `rbtrfs discover` | show detected btrfs filesystems, mounts, and subvolumes (read-only) |
-| `rbtrfs backup [--profile P] [--dry-run]` | snapshot burst → per-subvol backup → merge → local-snapshot GC (`--dry-run` needs no root) |
-| `rbtrfs snapshots [--all]` | list merged snapshots (`--all` also shows the per-subvol parts) |
-| `rbtrfs restore <id\|latest> --subvol /home --target DIR [--as-subvolume] [--host H \| --any-host]` | restore one subvolume into a directory (or, with `--as-subvolume`, into a new btrfs subvolume); `latest` = newest merged snapshot from this host |
-| `rbtrfs ls <id\|latest> [PATH]` | list a snapshot's contents |
-| `rbtrfs dump <id\|latest> PATH` | write one file from a snapshot to stdout |
-| `rbtrfs forget [--prune [--instant-delete --allow-unsafe]] [--dry-run]` | apply the profile's `[retention]` to the repository (needs root: takes the run lock) |
-| `rbtrfs gc [--keep-local N] [--keep-local-days D] [--all-keys]` | delete local btrfs snapshots left by past or crashed runs |
+| `discover [--json]` | show btrfs filesystems, mounts and subvolumes (read-only) |
+| `backup [--dry-run]` | snapshot, back up, merge, clean up local snapshots |
+| `snapshots [--all]` | list backups (`--all` also shows the internal per-subvolume parts) |
+| `restore <id\|latest> --subvol P --target DIR [--as-subvolume]` | restore one subvolume; `--as-subvolume` makes `DIR` a new btrfs subvolume |
+| `ls <id\|latest> [PATH]` / `dump <id\|latest> PATH` | list a snapshot / print one file |
+| `forget [--prune] [--dry-run]` | thin the repository per `[retention]` |
+| `gc [--keep-local N] [--keep-local-days D] [--all-keys]` | delete local snapshots left by old or crashed runs |
 
-Not yet: systemd units and a mountable (FUSE) restore view. Restores write plain
-files; `--as-subvolume` makes the restore target a btrfs subvolume, but subvolumes
-that were nested inside it come back as plain directories.
-
-## Requirements
-
-- Linux with btrfs, `libbtrfsutil` (ships with `btrfs-progs`)
-- root (mount namespace, snapshot ioctls, subvolume enumeration)
-- unprivileged user namespaces need not be enabled; rbtrfs uses a real root mount ns
+Common options: `--config FILE` (or `$RBTRFS_CONFIG`; default
+`/etc/rbtrfs/config.toml`) and `--profile NAME` (default `default`). `latest` means
+the newest backup *from this host*; use `--host NAME` or `--any-host` (restoring
+onto a rebuilt machine). `backup`, `gc` and `forget` need root.
 
 ## Configuration
 
-Default path `/etc/rbtrfs/config.toml`, override with `--config` or `$RBTRFS_CONFIG`.
-
 ```toml
 [profile.default]
-repository       = "/mnt/backup/restic"     # or sftp:…, rest:…, s3:…
-password_command = "pass show backup/restic" # or password / password_file
-subvolumes       = ["/home", "/srv", "/var/log"]   # mount points: exact paths or globs
-exclude          = ["**/.cache", "**/node_modules", "/home/alice/Downloads"]
-tags             = ["rbtrfs"]
-keep_local       = 1                          # local snapshot sets kept per subvolume
-keep_local_days  = 3                          # ...and any set younger than this (optional)
-
-[profile.default.retention]                   # used by `rbtrfs forget`
-keep_last    = 3
-keep_daily   = 7
-keep_weekly  = 4
-keep_monthly = 12
-keep_within  = "14d"
+repository       = "/mnt/backup/restic"
+password_command = "pass show backup/restic"   # exactly one of password / password_file / password_command
+subvolumes       = ["/home", "/srv"]
+exclude          = ["**/.cache", "*.tmp"]
+tags             = ["rbtrfs"]                  # tags on the merged snapshot
+keep_local       = 1                           # newest N local snapshot sets per subvolume
+keep_local_days  = 3                           # ...plus any younger than this (optional)
+staging          = "top-level"                 # or "in-subvolume" (see below)
 
 [profile.default.hooks]
 pre        = ["systemctl stop mydb"]
 post       = ["systemctl start mydb"]
-on_failure = "abort"                          # or "warn"
+on_failure = "abort"                           # or "warn"
+
+[profile.default.retention]                    # for `rbtrfs forget`
+keep_last = 3
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
+keep_within = "14d"
 ```
 
-**Subvolumes** are selected by their mount point. Only whole-subvolume mounts are
-snapshotted: a bind mount of a subdirectory is skipped with a warning, and a
-subvolume mounted at several places is recorded once. btrfs snapshots are not
-recursive, so a subvolume nested inside a selected one shows up as an empty
-directory; rbtrfs warns about nested subvolumes (mounted or not) that you did not
-select. Read-only nested subvolumes (snapper snapshots) are not warned about.
+- **Subvolumes** are chosen by mount point. Bind mounts of a subdirectory are
+  skipped, and a subvolume mounted twice is recorded once. Snapshots are not
+  recursive: a subvolume nested inside a selected one appears as an empty
+  directory, and rbtrfs warns unless you select it too.
+- **Excludes** work like restic's: `/path` is a path as recorded in the backup
+  (it applies to the subvolume that contains it), anything else matches at any
+  depth (`*.tmp`, `.cache`, `alice/.cache`), and a trailing `/` matches
+  directories only.
+- **Hooks** run inside the private namespace. `post` hooks always run once the
+  window opened, even if a `pre` hook or the snapshot failed, and
+  SIGINT/SIGTERM/SIGHUP are held until they finish, so a quiesced service is
+  thawed on failure or Ctrl-C (SIGKILL excepted).
+- **`staging = "in-subvolume"`** puts snapshots in `<mountpoint>/.rbtrfs-snapshots/`
+  (excluded from the backup) for hosts that can't mount the top-level subvolume.
+  Profiles sharing subvolumes need different `staging_name`s.
+- **Retention.** `forget` keeps merged snapshots per the policy (per host) and
+  drops the internal part snapshots older than the newest run. Snapshots rbtrfs
+  didn't create are never touched; with no `[retention]` it does nothing.
+  `--prune` also frees unreferenced data, lazily by default. `--instant-delete`
+  frees it now but is unsafe if anything else uses the repository, so it asks you
+  to type `yes` on a terminal and otherwise needs `--allow-unsafe`.
 
-**Excludes** behave like restic's `--exclude`:
+### Repository location
 
-- `/home/alice/Downloads` — a path starting with `/` is matched as *recorded* in the
-  backup, and applies to the subvolume it lives in. Glob syntax is fine after the
-  mount point (`/home/*/tmp`), not before it.
-- anything else matches at any depth: `*.tmp`, `.cache`, `alice/.cache`.
-- a trailing `/` matches directories only (`node_modules/`).
-- do not prefix patterns with `!`.
-
-**`keep_local`** is how many local read-only snapshot sets to keep per subvolume
-(handy for fast local rollback); with `keep_local_days`, sets younger than that
-are kept too. Incremental backups do **not** depend on them: the previous run is
-found through the repository.
-
-**`[retention]`** thins the repository with `rbtrfs forget` (restic semantics:
-`keep_last/hourly/daily/weekly/monthly/yearly`, `keep_within`), per host, over
-the merged snapshots rbtrfs wrote. The per-subvolume *part* snapshots only exist
-to make the next run incremental, so forget keeps just those of the newest run.
-Snapshots with other labels (your own restic jobs) are never touched. Without a
-`[retention]` table `forget` refuses to do anything. `--prune` also frees the data
-nothing references any more; by default rustic marks it for deletion and removes
-it on a later prune, `--instant-delete` removes it now, but is only safe if nothing else is using the
-repository, so it asks you to type `yes` on a terminal, and elsewhere (cron,
-systemd) refuses unless `--allow-unsafe` is passed.
-
-**Staging.** `staging` defaults to `"top-level"` (snapshots under
-`<subvolid=5>/.rbtrfs-snapshots/`, reached by a transient mount inside a private
-mount namespace). Use `staging = "in-subvolume"` where the top-level subvolume
-can't be mounted: snapshots go to `<mountpoint>/.rbtrfs-snapshots/` and are
-excluded from the backup automatically. Profiles that back up the same
-subvolumes should use different `staging_name`s.
-
-**Repository on NFS (or CIFS, sshfs, …).** If the repository's filesystem isn't mounted
-on the host, let rbtrfs mount it privately for the run:
+`repository` is a local path (the only one covered by the tests), `rest:https://…`
+or `rclone:remote:path` (needs `rclone`); the latter two are accepted but untested
+here. restic-style `sftp:`/`s3:` URLs are **not** supported: reach those through
+`rclone:`. For a share that isn't mounted on the host (NFS, CIFS, …), have
+rbtrfs mount it privately for the run:
 
 ```toml
 [profile.default]
-repository = "/run/rbtrfs/repo/restic/mybox"        # a path below the mount target
+repository = "/run/rbtrfs/repo/restic/mybox"   # a path below the mount target
 
 [profile.default.repository_mount]
-type    = "nfs"                                      # anything mount(8) understands
+type    = "nfs"                                 # anything mount(8) understands
 source  = "nas.local:/export/backups"
-options = "vers=4.2"                                 # optional
-target  = "/run/rbtrfs/repo"                         # optional, this is the default
+options = "vers=4.2"                            # optional
+target  = "/run/rbtrfs/repo"                    # optional (default)
 ```
 
-rbtrfs runs `mount -t <type> [-o <options>] <source> <target>` inside its private
-mount namespace before opening the repository (so `mount.nfs` and friends resolve
-hostnames and options as usual). The mount never appears in the host's mount
-table and disappears with the process, even on SIGKILL. Because the namespace is
-needed to see it, **every command that opens the repository then needs root**
-(`snapshots`, `ls`, `dump`, `restore`, `forget`, and `backup --dry-run` too).
-Without `repository_mount`, a repository on an NFS path simply has to be mounted on
-the host already. (Tested with a local filesystem standing in for the export; an
-actual NFS server isn't part of the test suite.)
+The mount is private to the process. Because it needs the namespace, **every command
+then needs root** (not just `backup`). Only a local filesystem stands in for the
+export in the tests, not a real NFS server.
 
-**Hooks run inside rbtrfs' private mount namespace.** They see the same mounts as
-the host, but anything they mount is not visible outside, and vice versa.
+## Concurrency and safety
 
-The config file is read as root; if it holds an inline `password` (or you use a
-`password_file`) keep it mode `0600` — rbtrfs warns otherwise.
+One `backup`/`gc`/`forget` runs at a time per machine (`/run/rbtrfs/rbtrfs.lock`).
+rustic_core cannot take restic's repository lock, so other tools are on their own.
+Against a running `rbtrfs backup`:
 
-## Consistency
-
-btrfs has no atomic multi-subvolume snapshot ioctl. rbtrfs runs pre-hooks, then
-issues every snapshot call back-to-back with no I/O in between (sub-millisecond
-skew), then post-hooks. The backup then reads the **read-only snapshots**, never
-the live subvolumes. Per-file integrity is guaranteed; exact cross-subvolume
-ordering is not. Quiesce databases/VMs in `pre`/`post` hooks if you need more.
-
-Post-hooks always run once the consistency window opened — even if a pre-hook
-failed part-way or the snapshot failed — and SIGINT/SIGTERM/SIGHUP are held until
-they have finished, so a stopped service is not left stopped.
-
-## Concurrency and repository maintenance
-
-rbtrfs takes a host-wide lock (`/run/rbtrfs/rbtrfs.lock`) so only one `backup`,
-`gc` or `forget` runs at a time; that makes `rbtrfs forget --prune` safe against
-rbtrfs's own backups.
-
-rustic_core has no restic-style repository lock (it is lock-free by design and
-cannot write restic's lock files), so what is safe *alongside* a running backup
-depends on which tool touches the repository:
-
-| concurrent with a running `rbtrfs backup` | safe? |
+| other activity | safe? |
 |---|---|
-| `rbtrfs forget [--prune]` / `rbtrfs gc` / another `rbtrfs backup` | yes — refused by the run lock |
-| `rustic` forget/prune with default options | yes by design: two-phase pruning only *marks* unneeded packs and deletes them after `keep_delete` (23h), recovering any that turn out to be used. Exercised in the tests, also with `keep_delete` set to 0 |
-| `restic backup` / readers (`restore`, `ls`, `check`) | yes (tested against a pruning rustic) |
-| **`restic forget --prune` / `restic prune`** | **no.** restic relies on locks that rbtrfs cannot take, so its prune can delete packs an in-flight backup has written but not yet indexed. Reproduced: `restic check` reported a missing pack while the backup had exited 0 |
-| **`--instant-delete`** (`rbtrfs forget` needs `--allow-unsafe` for it; also `rustic prune`) | **no.** It skips the two-phase safety. Reproduced: a concurrent backup crashed inside rustic_core |
+| rustic prune/forget (default options), `restic backup`, readers | yes (rustic's two-phase pruning; tested) |
+| `rbtrfs forget --prune` on the same machine | yes (run lock) |
+| **`restic prune` / `restic forget --prune`** | **no**: reproduced a missing pack while the backup exited 0 |
+| **`--instant-delete`** (any tool) | **no**: skips the two-phase safety |
 
-So: prune with `rbtrfs forget --prune` (or rustic), never with restic's own prune
-while backups can run; and only use `--instant-delete` when nothing else is
-touching the repository.
+Prune with `rbtrfs forget --prune` (or rustic), and run restic's own prune only
+when no backup can be running.
 
 ## Tests
 
-```
-cargo test
-```
-
-Unit tests need nothing. The end-to-end tests (`tests/e2e_loopback.rs`) build
-throwaway loopback btrfs filesystems, so they need root. When you are not root,
-each test re-runs itself inside its own privileged container (via
-[testcontainers](https://crates.io/crates/testcontainers)): no sudo, parallel,
-and nothing touches the host's mounts. This needs access to a Docker daemon
-(your user in the `docker` group, or `DOCKER_HOST`). Without one the e2e tests
-print a notice and skip; set `RBTRFS_E2E_REQUIRED=1` to make that a failure.
-When run as root (`sudo -E cargo test`, or in CI) they run directly, serially,
-and need `mkfs.btrfs`, `losetup`, `setfattr`/`getfattr` and `restic` on `PATH`.
-
-They cover snapshot isolation, excludes, metadata fidelity (mode, owner, mtime,
-symlinks, xattrs), incremental parents, local and repository retention, hook
-failure and signal handling, SIGKILL mid-run (no leaked mounts, GC reclaims the
-orphans), files staying individually intact while writers churn two subvolumes,
-the run lock, a repository on a privately mounted filesystem, repository safety against a concurrent rustic prune, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
-and an official `restic check --read-data` of the repository rbtrfs wrote.
-
-## Development spikes
-
-`spikes/` holds the Milestone 0 proofs (`cargo run --example spike_*`), including
-the cross-check that official `restic check --read-data` / `restic restore` accept
-what rbtrfs writes.
+`cargo test` runs everything. The end-to-end tests build real btrfs filesystems on
+loop devices and need root; when you aren't root each test re-runs itself in its
+own privileged container ([testcontainers](https://crates.io/crates/testcontainers):
+no sudo, parallel, nothing touches your mounts), which needs Docker access. Without
+it they skip with a notice; `RBTRFS_E2E_REQUIRED=1` makes that an error. As root
+they run directly and need `mkfs.btrfs`, `losetup`, `setfattr` and `restic` on
+`PATH`. The suite also checks the repository with the official `restic check
+--read-data` (restic 0.19). `DESIGN.md` has the architecture and decisions;
+`spikes/` holds the original proofs of concept.
 
 ## License
 
-Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) or
-MIT ([LICENSE-MIT](LICENSE-MIT)) at your option.
+MIT OR Apache-2.0 ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).

@@ -125,7 +125,7 @@ What the tool does instead:
 1. Run configured **pre-hooks** (quiesce databases, flush application state).
 2. Issue every `SNAP_CREATE_V2` back-to-back with **zero I/O in between** — no logging, no stat
    calls, no allocation in the loop. All paths and file descriptors are resolved beforehand. The
-   skew window is sub-millisecond per subvolume.
+   skew window is about 2 ms per subvolume (measured with `btrfs subvolume snapshot -r` on a loopback filesystem; not sub-millisecond).
 3. Run **post-hooks** (thaw).
 4. Back up at leisure from the now-frozen read-only snapshots.
 
@@ -223,7 +223,7 @@ systemd units are explicitly out of scope for v1.
 
 All spikes pass. Code in `spikes/`, wired as `cargo run --example spike_*`.
 Locked versions: `rustic_core` 0.13.0, `rustic_backend` 0.7.0, `libbtrfsutil` 0.8.0, `nix` 0.31.
-Cross-checked against official `restic` 0.18.0.
+Cross-checked against official `restic` 0.18.0 at the time; the e2e suite now runs against the restic in its test image (0.19.1 when last run).
 
 - **`spike_aspath_merge`** — `BackupOptions::as_path` remaps the recorded path
   (`staging/home` read, `/home` recorded); `Repository::merge_snapshots` produces one snapshot whose
