@@ -12,10 +12,10 @@ use rbtrfs::cli::{Cli, Command};
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.command.needs_root() && !rbtrfs::is_root() {
+        anyhow::bail!("`{}` needs root", command_name(&cli.command));
+    }
     if cli.command.needs_namespace() {
-        if !rbtrfs::is_root() {
-            anyhow::bail!("`{}` needs root", command_name(&cli.command));
-        }
         rbtrfs::ns::enter_private_namespace().context("entering private mount namespace")?;
     }
 
@@ -28,6 +28,9 @@ fn command_name(c: &Command) -> &'static str {
         Command::Backup { .. } => "backup",
         Command::Snapshots { .. } => "snapshots",
         Command::Restore { .. } => "restore",
+        Command::Ls { .. } => "ls",
+        Command::Dump { .. } => "dump",
+        Command::Forget { .. } => "forget",
         Command::Gc { .. } => "gc",
     }
 }

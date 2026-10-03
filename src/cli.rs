@@ -70,6 +70,53 @@ pub enum Command {
         /// ...or from any host.
         #[arg(long)]
         any_host: bool,
+        /// Create TARGET as a new btrfs subvolume (root; TARGET must be on btrfs and
+        /// must not exist) instead of a plain directory.
+        #[arg(long)]
+        as_subvolume: bool,
+    },
+    /// List the contents of a snapshot (default: everything).
+    Ls {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        /// Snapshot id, or `latest`.
+        snapshot: String,
+        /// Recorded path to list, e.g. `/home/alice`.
+        #[arg(default_value = "/")]
+        path: PathBuf,
+        #[arg(long, conflicts_with = "any_host")]
+        host: Option<String>,
+        #[arg(long)]
+        any_host: bool,
+    },
+    /// Write one file from a snapshot to stdout.
+    Dump {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        snapshot: String,
+        /// Recorded path of the file, e.g. `/etc/fstab`.
+        path: PathBuf,
+        #[arg(long, conflicts_with = "any_host")]
+        host: Option<String>,
+        #[arg(long)]
+        any_host: bool,
+    },
+    /// Apply the profile's `retention` to the repository: forget old merged
+    /// snapshots and the part snapshots nothing needs any more.
+    Forget {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        /// Also prune: delete data no remaining snapshot references.
+        #[arg(long)]
+        prune: bool,
+        /// With --prune: delete unreferenced files immediately instead of marking them
+        /// for later deletion. Only safe if no other restic/rustic process uses the
+        /// repository right now.
+        #[arg(long, requires = "prune")]
+        instant_delete: bool,
+        /// Show what would be forgotten, change nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Delete local btrfs snapshots left by past (or crashed) runs.
     Gc {
@@ -78,6 +125,9 @@ pub enum Command {
         /// Override the profile's `keep_local`.
         #[arg(long)]
         keep_local: Option<usize>,
+        /// Override the profile's `keep_local_days`.
+        #[arg(long)]
+        keep_local_days: Option<u64>,
         /// Also sweep snapshot sets of subvolumes the profile no longer selects.
         #[arg(long)]
         all_keys: bool,
@@ -85,6 +135,12 @@ pub enum Command {
 }
 
 impl Command {
+    /// `forget` mutates the repository and must hold the run lock (in /run), so
+    /// it needs root even though it touches no btrfs.
+    pub fn needs_root(&self) -> bool {
+        self.needs_namespace() || matches!(self, Command::Forget { .. })
+    }
+
     /// Does this command need a private mount namespace (and thus root)?
     pub fn needs_namespace(&self) -> bool {
         match self {
@@ -110,11 +166,14 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Command::Gc { profile, keep_local, all_keys } => {
+        Command::Gc { profile, keep_local, keep_local_days, all_keys } => {
             let p = cli.load_profile(profile)?;
-            let keep = keep_local.unwrap_or(p.keep_local);
+            let retention = crate::snapshot::LocalRetention::new(
+                keep_local.unwrap_or(p.keep_local),
+                keep_local_days.or(p.keep_local_days),
+            );
             let _lock = crate::lock::acquire()?;
-            let report = gc::run(&p, keep, *all_keys).context("gc")?;
+            let report = gc::run(&p, &retention, *all_keys).context("gc")?;
             for path in &report.deleted {
                 println!("deleted {}", path.display());
             }
@@ -129,15 +188,33 @@ pub fn run(cli: Cli) -> Result<()> {
             let p = cli.load_profile(profile)?;
             crate::restore::list(&p, *all)
         }
-        Command::Restore { profile, snapshot, subvol, target, host, any_host } => {
+        Command::Restore { profile, snapshot, subvol, target, host, any_host, as_subvolume } => {
             let p = cli.load_profile(profile)?;
-            let host = match (host, any_host) {
-                (_, true) => crate::restore::HostFilter::Any,
-                (Some(h), _) => crate::restore::HostFilter::Named(h.clone()),
-                _ => crate::restore::HostFilter::ThisHost,
-            };
-            crate::restore::restore(&p, snapshot, subvol, target, &host)
+            let host = host_filter(host, *any_host);
+            crate::restore::restore(&p, snapshot, subvol, target, &host, *as_subvolume)
         }
+        Command::Ls { profile, snapshot, path, host, any_host } => {
+            let p = cli.load_profile(profile)?;
+            crate::restore::ls(&p, snapshot, path, &host_filter(host, *any_host))
+        }
+        Command::Dump { profile, snapshot, path, host, any_host } => {
+            let p = cli.load_profile(profile)?;
+            crate::restore::dump(&p, snapshot, path, &host_filter(host, *any_host))
+        }
+        Command::Forget { profile, prune, instant_delete, dry_run } => {
+            let p = cli.load_profile(profile)?;
+            let _lock = crate::lock::acquire()?;
+            crate::forget::run(&p, *prune, *instant_delete, *dry_run)
+        }
+    }
+}
+
+fn host_filter(host: &Option<String>, any_host: bool) -> crate::restore::HostFilter {
+    use crate::restore::HostFilter;
+    match (host, any_host) {
+        (_, true) => HostFilter::Any,
+        (Some(h), _) => HostFilter::Named(h.clone()),
+        _ => HostFilter::ThisHost,
     }
 }
 

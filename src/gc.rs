@@ -6,11 +6,11 @@ use crate::btrfs::LibBtrfsUtil;
 use crate::config::Profile;
 use crate::discover;
 use crate::select;
-use crate::snapshot::{self, GcReport, StagingArea};
+use crate::snapshot::{self, GcReport, LocalRetention, StagingArea};
 
-/// Delete local snapshot sets beyond the newest `keep_local` per subvolume key.
+/// Delete local snapshot sets outside `retention`, per subvolume key.
 /// `all_keys` also sweeps keys of subvolumes no longer selected by the profile.
-pub fn run(profile: &Profile, keep_local: usize, all_keys: bool) -> Result<GcReport> {
+pub fn run(profile: &Profile, retention: &LocalRetention, all_keys: bool) -> Result<GcReport> {
     let filesystems = discover::discover()?;
     let resolution = select::resolve(&filesystems, &profile.subvolumes)?;
     let btrfs = LibBtrfsUtil;
@@ -22,7 +22,7 @@ pub fn run(profile: &Profile, keep_local: usize, all_keys: bool) -> Result<GcRep
         let keys: Vec<String> = sel.selected.iter().map(|s| s.key.clone()).collect();
         let keys = (!all_keys).then_some(keys.as_slice());
         for root in area.gc_roots() {
-            report.merge(snapshot::gc(&btrfs, root, keys, keep_local)?);
+            report.merge(snapshot::gc(&btrfs, root, keys, retention)?);
         }
     }
     Ok(report)

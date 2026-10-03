@@ -52,4 +52,9 @@ impl BtrfsOps for LibBtrfsUtil {
         libbtrfsutil::delete_subvolume(path)
             .with_context(|| format!("delete_subvolume({})", path.display()))
     }
+
+    fn create_subvolume(&self, path: &Path) -> Result<()> {
+        libbtrfsutil::create_subvolume(path)
+            .with_context(|| format!("create_subvolume({})", path.display()))
+    }
 }

@@ -37,4 +37,7 @@ pub trait BtrfsOps {
 
     /// Delete the subvolume at `path`.
     fn delete_subvolume(&self, path: &Path) -> Result<()>;
+
+    /// Create a new, empty subvolume at `path` (which must not exist).
+    fn create_subvolume(&self, path: &Path) -> Result<()>;
 }

@@ -115,7 +115,28 @@ pub fn burst(btrfs: &dyn BtrfsOps, jobs: &[SnapJob]) -> Result<()> {
     Ok(())
 }
 
-/// Delete local snapshot sets beyond the newest `keep` runs, per key, under
+/// Which local snapshot sets survive a GC.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalRetention {
+    /// Newest N sets per key are always kept.
+    pub keep: usize,
+    /// Sets younger than this many days are kept as well.
+    pub keep_days: Option<u64>,
+    /// Current unix time (a parameter so tests need no clock).
+    pub now: u64,
+}
+
+impl LocalRetention {
+    pub fn new(keep: usize, keep_days: Option<u64>) -> Self {
+        Self { keep, keep_days, now: runid::now_unix() }
+    }
+
+    fn young(&self, run_secs: u64) -> bool {
+        self.keep_days.is_some_and(|d| self.now.saturating_sub(run_secs) < d.saturating_mul(86_400))
+    }
+}
+
+/// Delete local snapshot sets that fall outside `retention`, per key, under
 /// `staging_root`. Only directories whose name parses as one of our run ids and
 /// that really are subvolumes are touched — foreign entries (snapper etc.) are
 /// ignored. `keys` limits GC to those keys (a profile only owns its own); `None`
@@ -124,7 +145,7 @@ pub fn gc(
     btrfs: &dyn BtrfsOps,
     staging_root: &Path,
     keys: Option<&[String]>,
-    keep: usize,
+    retention: &LocalRetention,
 ) -> Result<GcReport> {
     let mut report = GcReport::default();
     let key_dirs = match std::fs::read_dir(staging_root) {
@@ -153,7 +174,10 @@ pub fn gc(
             .collect();
         runs.sort_by_key(|(secs, _)| std::cmp::Reverse(*secs)); // newest first
 
-        for (_secs, path) in runs.into_iter().skip(keep) {
+        for (secs, path) in runs.into_iter().skip(retention.keep) {
+            if retention.young(secs) {
+                continue;
+            }
             match btrfs.is_subvolume(&path) {
                 Ok(true) => {}
                 Ok(false) => {
@@ -228,6 +252,9 @@ mod tests {
             self.snapshots.borrow_mut().push((src.into(), dest.into()));
             Ok(())
         }
+        fn create_subvolume(&self, _: &Path) -> Result<()> {
+            Ok(())
+        }
         fn delete_subvolume(&self, p: &Path) -> Result<()> {
             if self.fail_delete.iter().any(|x| x == p) {
                 anyhow::bail!("boom");
@@ -247,6 +274,11 @@ mod tests {
         t
     }
 
+    /// Retention evaluated "now" = 2026-01-03T12:00:00Z.
+    fn keep(n: usize) -> LocalRetention {
+        LocalRetention { keep: n, keep_days: None, now: runid::to_unix("20260103T120000Z").unwrap() }
+    }
+
     const R1: &str = "20260101T000000Z";
     const R2: &str = "20260102T000000Z";
     const R3: &str = "20260103T000000Z";
@@ -255,19 +287,29 @@ mod tests {
     fn keeps_newest_n_per_key() {
         let t = staging(&[("home", &[R1, R2, R3]), ("srv", &[R1, R2])]);
         let fake = Fake::default();
-        let r = gc(&fake, t.path(), None, 2).unwrap();
+        let r = gc(&fake, t.path(), None, &keep(2)).unwrap();
         let mut got = r.deleted.clone();
         got.sort();
         assert_eq!(got, vec![t.path().join("home").join(R1)]);
-        let r = gc(&fake, t.path(), None, 0).unwrap();
+        let r = gc(&fake, t.path(), None, &keep(0)).unwrap();
         assert_eq!(r.deleted.len(), 5);
+    }
+
+    #[test]
+    fn young_sets_survive_beyond_the_count() {
+        let t = staging(&[("home", &[R1, R2, R3])]);
+        let fake = Fake::default();
+        // now = Jan 3 12:00; R3 is 12h old, R2 1.5d, R1 2.5d. keep 1 + younger than 2 days
+        let ret = LocalRetention { keep_days: Some(2), ..keep(1) };
+        let r = gc(&fake, t.path(), None, &ret).unwrap();
+        assert_eq!(r.deleted, vec![t.path().join("home").join(R1)]);
     }
 
     #[test]
     fn only_touches_owned_keys_and_run_ids() {
         let t = staging(&[("home", &[R1, R2]), ("other", &[R1, R2]), ("home", &["snapper-1"])]);
         let fake = Fake::default();
-        let r = gc(&fake, t.path(), Some(&["home".to_string()]), 1).unwrap();
+        let r = gc(&fake, t.path(), Some(&["home".to_string()]), &keep(1)).unwrap();
         assert_eq!(r.deleted, vec![t.path().join("home").join(R1)]);
     }
 
@@ -279,7 +321,7 @@ mod tests {
             fail_delete: vec![t.path().join("b").join(R1)],
             ..Default::default()
         };
-        let r = gc(&fake, t.path(), None, 1).unwrap();
+        let r = gc(&fake, t.path(), None, &keep(1)).unwrap();
         assert!(r.deleted.is_empty());
         assert_eq!(r.skipped, vec![t.path().join("a").join(R1)]);
         assert_eq!(r.failed.len(), 1);
@@ -288,7 +330,7 @@ mod tests {
     #[test]
     fn missing_staging_root_is_fine() {
         let t = tempfile::tempdir().unwrap();
-        let r = gc(&Fake::default(), &t.path().join("nope"), None, 1).unwrap();
+        let r = gc(&Fake::default(), &t.path().join("nope"), None, &keep(1)).unwrap();
         assert!(r.deleted.is_empty());
     }
 

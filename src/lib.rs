@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod discover;
 pub mod excludes;
+pub mod forget;
 pub mod gc;
 pub mod hooks;
 pub mod lock;

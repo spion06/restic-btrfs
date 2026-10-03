@@ -67,8 +67,74 @@ pub struct Profile {
     #[serde(default = "default_keep_local")]
     pub keep_local: usize,
 
+    /// Also keep every local snapshot set younger than this many days, even
+    /// beyond `keep_local`.
+    #[serde(default)]
+    pub keep_local_days: Option<u64>,
+
+    /// Repository-side retention for `rbtrfs forget`. Required by that command.
+    #[serde(default)]
+    pub retention: Option<Retention>,
+
     #[serde(default)]
     pub hooks: Hooks,
+}
+
+/// Which merged snapshots `rbtrfs forget` keeps (restic/rustic semantics).
+///
+/// ```toml
+/// [profile.default.retention]
+/// keep_last = 3
+/// keep_daily = 7
+/// keep_weekly = 4
+/// keep_monthly = 12
+/// keep_within = "14d"
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retention {
+    pub keep_last: Option<u32>,
+    pub keep_hourly: Option<u32>,
+    pub keep_daily: Option<u32>,
+    pub keep_weekly: Option<u32>,
+    pub keep_monthly: Option<u32>,
+    pub keep_yearly: Option<u32>,
+    /// Keep everything newer than this, relative to the newest snapshot (`"30d"`).
+    pub keep_within: Option<String>,
+}
+
+impl Retention {
+    pub fn is_empty(&self) -> bool {
+        self.keep_last.is_none()
+            && self.keep_hourly.is_none()
+            && self.keep_daily.is_none()
+            && self.keep_weekly.is_none()
+            && self.keep_monthly.is_none()
+            && self.keep_yearly.is_none()
+            && self.keep_within.is_none()
+    }
+
+    /// Convert to rustic_core's options (which parse `keep_within` as a duration).
+    pub fn to_keep_options(&self) -> Result<rustic_core::KeepOptions> {
+        let mut v = serde_json::Map::new();
+        for (k, n) in [
+            ("keep-last", self.keep_last),
+            ("keep-hourly", self.keep_hourly),
+            ("keep-daily", self.keep_daily),
+            ("keep-weekly", self.keep_weekly),
+            ("keep-monthly", self.keep_monthly),
+            ("keep-yearly", self.keep_yearly),
+        ] {
+            if let Some(n) = n {
+                v.insert(k.into(), n.into());
+            }
+        }
+        if let Some(w) = &self.keep_within {
+            v.insert("keep-within".into(), w.clone().into());
+        }
+        serde_json::from_value(serde_json::Value::Object(v))
+            .context("invalid retention (is keep_within a duration like \"30d\"?)")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -170,6 +236,9 @@ impl Profile {
         if self.subvolumes.is_empty() {
             bail!("`subvolumes` must not be empty");
         }
+        if let Some(r) = &self.retention {
+            r.to_keep_options().context("[retention]")?;
+        }
         Ok(())
     }
 
@@ -220,6 +289,33 @@ mod tests {
         assert_eq!(p.keep_local, 1);
         assert_eq!(p.staging, Staging::TopLevel);
         assert_eq!(p.resolve_password().unwrap(), "hunter2");
+    }
+
+    #[test]
+    fn retention_converts_and_validates() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [profile.default]
+            repository = "/repo"
+            password = "x"
+            subvolumes = ["/home"]
+            keep_local_days = 7
+            [profile.default.retention]
+            keep_last = 3
+            keep_within = "30d"
+            "#,
+        )
+        .unwrap();
+        let p = cfg.profile("default").unwrap();
+        p.validate().unwrap();
+        assert_eq!(p.keep_local_days, Some(7));
+        let k = p.retention.as_ref().unwrap().to_keep_options().unwrap();
+        assert_eq!(k.keep_last, Some(3));
+        assert!(k.keep_within.is_some());
+
+        let bad = Retention { keep_within: Some("soon".into()), ..Default::default() };
+        assert!(bad.to_keep_options().is_err());
+        assert!(Retention::default().is_empty());
     }
 
     #[test]

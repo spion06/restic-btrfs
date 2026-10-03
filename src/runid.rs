@@ -2,14 +2,17 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Current unix time in seconds.
+pub fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before 1970")
+        .as_secs()
+}
+
 /// `YYYYMMDDThhmmssZ` for the current UTC time.
 pub fn now() -> String {
-    from_unix(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before 1970")
-            .as_secs(),
-    )
+    from_unix(now_unix())
 }
 
 /// Parse a run id back to unix seconds, for sorting/GC. Returns `None` if it is

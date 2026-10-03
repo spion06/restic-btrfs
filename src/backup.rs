@@ -18,7 +18,7 @@ use crate::lock;
 use crate::repo::RepoHandle;
 use crate::runid;
 use crate::select::{self, FilesystemSelection};
-use crate::snapshot::{self, GcReport, SnapJob, StagingArea};
+use crate::snapshot::{self, GcReport, LocalRetention, SnapJob, StagingArea};
 
 pub struct RunOutcome {
     pub run_id: String,
@@ -120,6 +120,19 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     let mut merged_snap = merged_opts.to_snapshot()?;
     merged_snap.hostname = crate::hostname();
     merged_snap.time = burst_time;
+    // Lineage for listings: point at this host's previous merged snapshot. (Only the
+    // parts drive incremental parent detection; this is informational.)
+    merged_snap.parent = repo
+        .get_all_snapshots()
+        .context("listing snapshots")?
+        .into_iter()
+        .filter(|s| {
+            s.label == "rbtrfs"
+                && s.hostname == merged_snap.hostname
+                && !s.tags.iter().any(|t| t == crate::restore::PART_TAG)
+        })
+        .max_by(|a, b| a.time.cmp(&b.time))
+        .map(|s| s.id);
     let merged = repo
         .merge_snapshots(&parts, &newest_wins, merged_snap)
         .context("merging part snapshots")?;
@@ -131,7 +144,7 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         let keys: Vec<String> = jobs.iter().map(|j| j.key.clone()).collect();
         debug_assert_eq!(jobs.len(), sel.selected.len());
         for root in area.gc_roots() {
-            match snapshot::gc(&btrfs, root, Some(&keys), profile.keep_local) {
+            match snapshot::gc(&btrfs, root, Some(&keys), &LocalRetention::new(profile.keep_local, profile.keep_local_days)) {
                 Ok(r) => report.merge(r),
                 Err(e) => eprintln!("rbtrfs: warning: gc of {} failed: {e:#}", root.display()),
             }
