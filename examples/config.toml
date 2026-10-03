@@ -1,0 +1,16 @@
+# Example rbtrfs configuration. Install to /etc/rbtrfs/config.toml
+# or point at it with `rbtrfs --config` / $RBTRFS_CONFIG.
+
+[profile.default]
+repository = "/mnt/backup/restic"
+password_file = "/etc/rbtrfs/repo.pw"
+subvolumes = ["/", "/home", "/srv"]
+# Excludes work like restic's: "/path" is as recorded in the backup; anything else matches at any depth.
+exclude = ["**/.cache", "*.tmp"]
+tags = ["rbtrfs", "nightly"]
+keep_local = 2
+
+[profile.default.hooks]
+pre = []
+post = []
+on_failure = "abort"
