@@ -67,3 +67,44 @@ impl Drop for TransientMount {
         let _ = std::fs::remove_dir(&self.target);
     }
 }
+
+/// The configured repository filesystem, mounted for the lifetime of the value.
+/// Like [`TransientMount`] it only makes sense in a private namespace, and the
+/// kernel tears it down with the namespace even on SIGKILL.
+pub struct RepositoryMount {
+    target: std::path::PathBuf,
+}
+
+impl RepositoryMount {
+    /// Run `mount -t <type> [-o <options>] <source> <target>`. The `mount(8)`
+    /// binary (not `mount(2)`) is used so helpers such as `mount.nfs`, which
+    /// resolve hostnames and negotiate options, are available.
+    pub fn mount(spec: &crate::config::RepositoryMount) -> Result<Self> {
+        std::fs::create_dir_all(&spec.target)
+            .with_context(|| format!("creating mount target {}", spec.target.display()))?;
+        let mut cmd = std::process::Command::new("mount");
+        cmd.arg("-t").arg(&spec.fstype);
+        if let Some(o) = spec.options.as_deref().filter(|o| !o.is_empty()) {
+            cmd.arg("-o").arg(o);
+        }
+        cmd.arg(&spec.source).arg(&spec.target);
+        let out = cmd.output().context("running mount(8) (is util-linux installed?)")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "mounting {} ({}) at {} failed: {}",
+                spec.source,
+                spec.fstype,
+                spec.target.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(Self { target: spec.target.clone() })
+    }
+}
+
+impl Drop for RepositoryMount {
+    fn drop(&mut self) {
+        let _ = umount2(&self.target, MntFlags::MNT_DETACH);
+        let _ = std::fs::remove_dir(&self.target);
+    }
+}

@@ -182,10 +182,12 @@ impl LoopFs {
             "for m in $(mount | awk '$3 ~ \"^{}\" {{print $3}}' | sort -r); do umount \"$m\"; done",
             base.display()
         ));
-        try_sh(&format!(
-            "losetup -j {}/fs.img | cut -d: -f1 | xargs -r losetup -d",
-            base.display()
-        ));
+        for img in ["fs.img", "repo.img"] {
+            try_sh(&format!(
+                "losetup -j {}/{img} | cut -d: -f1 | xargs -r losetup -d",
+                base.display()
+            ));
+        }
         let _ = fs::remove_dir_all(base);
     }
 }
@@ -246,6 +248,11 @@ impl Fx {
             ),
         )
         .unwrap();
+    }
+
+    /// Write `base` (a complete profile) followed by `extra` raw TOML.
+    fn write_cfg_keep_repo_mount(&self, base: &str, extra: &str) {
+        fs::write(&self.cfg, format!("{base}{extra}")).unwrap();
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -1078,4 +1085,66 @@ fn official_restic_backups_during_rustic_prune_stay_intact() {
     fx.restic_check();
     let out = fx.base().join("restic-restore");
     fx.restic(&["restore", "latest", "--target", &out.to_string_lossy(), "--path", &data.to_string_lossy()]);
+}
+
+#[test]
+fn repository_can_live_on_a_privately_mounted_filesystem() {
+    e2e!();
+    // A second filesystem that the host never mounts stands in for an NFS export:
+    // rbtrfs must mount it itself, inside its namespace, before opening the repo.
+    let fx = Fx::new("repomount", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("f.txt"), b"on the remote repo").unwrap();
+
+    let img = fx.base().join("repo.img");
+    sh(&format!("truncate -s 256M '{0}' && mkfs.btrfs -qf '{0}'", img.display()));
+    let dev = sh(&format!("losetup --find --show '{}'", img.display())).trim().to_string();
+    let target = fx.base().join("repo-mnt");
+    let cfg = |source: &str| {
+        format!(
+            "[profile.default]\nrepository = \"{t}/restic/box\"\npassword = \"pw\"\n\
+             subvolumes = [\"{a}\"]\n\
+             [profile.default.repository_mount]\ntype = \"btrfs\"\nsource = \"{source}\"\n\
+             target = \"{t}\"\n",
+            t = target.display(),
+            a = a.display()
+        )
+    };
+    let mounts_before = host_mounts();
+
+    // a mount that fails stops the run before anything is snapshotted
+    fs::write(&fx.cfg, cfg("/dev/does-not-exist")).unwrap();
+    let bad = fx.run(&["backup"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("mounting"), "{}", text(&bad));
+    assert!(fx.local_runs(a).is_empty());
+
+    fs::write(&fx.cfg, cfg(&dev)).unwrap();
+    fx.ok(&["backup", "--dry-run"]);
+    fx.ok(&["backup"]);
+    assert!(fx.ok(&["snapshots"]).contains("merged"));
+    assert!(fx.ok(&["ls", "latest"]).contains("f.txt"));
+    let restored = fx.restore("latest", a, "restored");
+    assert_eq!(fs::read(restored.join("f.txt")).unwrap(), b"on the remote repo");
+    fx.ok(&["backup"]);
+    fx.write_cfg_keep_repo_mount(&cfg(&dev), "[profile.default.retention]\nkeep_last = 1\n");
+    fx.ok(&["forget"]);
+
+    // the mount was private: the host never saw it, and left nothing behind
+    assert_eq!(mounts_before, host_mounts(), "repository mount leaked into the host namespace");
+    assert!(!target.join("restic").exists(), "repository must not exist on the host side");
+
+    // ...yet the repository really is on that device, and official restic reads it
+    let peek = fx.base().join("peek");
+    fs::create_dir_all(&peek).unwrap();
+    sh(&format!("mount '{dev}' '{}'", peek.display()));
+    let out = Command::new("restic")
+        .env("RESTIC_PASSWORD", "pw")
+        .arg("-r")
+        .arg(peek.join("restic/box"))
+        .args(["check", "--read-data"])
+        .output()
+        .unwrap();
+    sh(&format!("umount '{}'", peek.display()));
+    assert!(out.status.success(), "{}", text(&out));
 }

@@ -34,6 +34,11 @@ pub struct Profile {
     /// restic repository location (`/path`, `rest:`, `s3:…`, `sftp:…`, …).
     pub repository: String,
 
+    /// Mount a filesystem (NFS, CIFS, …) privately for the duration of the run, to
+    /// hold a local-path `repository`. See [`RepositoryMount`].
+    #[serde(default)]
+    pub repository_mount: Option<RepositoryMount>,
+
     /// Exactly one password source must be given.
     #[serde(default)]
     pub password: Option<String>,
@@ -78,6 +83,39 @@ pub struct Profile {
 
     #[serde(default)]
     pub hooks: Hooks,
+}
+
+/// A filesystem to mount, inside rbtrfs' private mount namespace, before the
+/// repository is opened.
+///
+/// ```toml
+/// [profile.default.repository_mount]
+/// type    = "nfs"
+/// source  = "nas.local:/export/backups"
+/// options = "vers=4.2"
+/// target  = "/run/rbtrfs/repo"                  # the default
+///
+/// [profile.default]
+/// repository = "/run/rbtrfs/repo/restic/mybox"  # a path below `target`
+/// ```
+///
+/// Runs `mount -t <type> [-o <options>] <source> <target>`, so anything `mount(8)`
+/// and its helpers (`mount.nfs`, `mount.cifs`, …) can mount works. The mount is
+/// private to the process: it never appears in the host's mount table.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryMount {
+    #[serde(rename = "type")]
+    pub fstype: String,
+    pub source: String,
+    #[serde(default)]
+    pub options: Option<String>,
+    #[serde(default = "default_repo_mount_target")]
+    pub target: PathBuf,
+}
+
+fn default_repo_mount_target() -> PathBuf {
+    PathBuf::from("/run/rbtrfs/repo")
 }
 
 /// Which merged snapshots `rbtrfs forget` keeps (restic/rustic semantics).
@@ -236,6 +274,21 @@ impl Profile {
         if self.subvolumes.is_empty() {
             bail!("`subvolumes` must not be empty");
         }
+        if let Some(m) = &self.repository_mount {
+            if m.fstype.trim().is_empty() || m.source.trim().is_empty() {
+                bail!("repository_mount needs a non-empty `type` and `source`");
+            }
+            if !m.target.is_absolute() {
+                bail!("repository_mount.target must be an absolute path");
+            }
+            if !Path::new(&self.repository).starts_with(&m.target) {
+                bail!(
+                    "with repository_mount, `repository` must be a path below its target {} (got {:?})",
+                    m.target.display(),
+                    self.repository
+                );
+            }
+        }
         if let Some(r) = &self.retention {
             r.to_keep_options().context("[retention]")?;
         }
@@ -289,6 +342,35 @@ mod tests {
         assert_eq!(p.keep_local, 1);
         assert_eq!(p.staging, Staging::TopLevel);
         assert_eq!(p.resolve_password().unwrap(), "hunter2");
+    }
+
+    fn with_mount(repo: &str, extra: &str) -> Result<()> {
+        let cfg: Config = toml::from_str(&format!(
+            r#"
+            [profile.default]
+            repository = "{repo}"
+            password = "x"
+            subvolumes = ["/home"]
+            [profile.default.repository_mount]
+            type = "nfs"
+            source = "nas:/export"
+            {extra}
+            "#
+        ))
+        .unwrap();
+        cfg.profile("default").unwrap().validate()
+    }
+
+    #[test]
+    fn repository_mount_validation() {
+        with_mount("/run/rbtrfs/repo/restic/box", "").unwrap();
+        with_mount("/srv/x/restic", "target = \"/srv/x\"\noptions = \"vers=4.2\"").unwrap();
+        // repository outside the mount target, relative target, remote repo: all rejected
+        assert!(with_mount("/elsewhere/repo", "").is_err());
+        assert!(with_mount("/srv/x/r", "target = \"srv/x\"").is_err());
+        assert!(with_mount("rest:https://h/", "").is_err());
+        // a sibling that merely shares a string prefix is not "below" the target
+        assert!(with_mount("/run/rbtrfs/repository/r", "").is_err());
     }
 
     #[test]

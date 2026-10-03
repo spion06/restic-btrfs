@@ -104,6 +104,30 @@ can't be mounted: snapshots go to `<mountpoint>/.rbtrfs-snapshots/` and are
 excluded from the backup automatically. Profiles that back up the same
 subvolumes should use different `staging_name`s.
 
+**Repository on NFS (or CIFS, sshfs, …).** If the repository's filesystem isn't mounted
+on the host, let rbtrfs mount it privately for the run:
+
+```toml
+[profile.default]
+repository = "/run/rbtrfs/repo/restic/mybox"        # a path below the mount target
+
+[profile.default.repository_mount]
+type    = "nfs"                                      # anything mount(8) understands
+source  = "nas.local:/export/backups"
+options = "vers=4.2"                                 # optional
+target  = "/run/rbtrfs/repo"                         # optional, this is the default
+```
+
+rbtrfs runs `mount -t <type> [-o <options>] <source> <target>` inside its private
+mount namespace before opening the repository (so `mount.nfs` and friends resolve
+hostnames and options as usual). The mount never appears in the host's mount
+table and disappears with the process, even on SIGKILL. Because the namespace is
+needed to see it, **every command that opens the repository then needs root**
+(`snapshots`, `ls`, `dump`, `restore`, `forget`, and `backup --dry-run` too).
+Without `repository_mount`, a repository on an NFS path simply has to be mounted on
+the host already. (Tested with a local filesystem standing in for the export; an
+actual NFS server isn't part of the test suite.)
+
 **Hooks run inside rbtrfs' private mount namespace.** They see the same mounts as
 the host, but anything they mount is not visible outside, and vice versa.
 
@@ -164,7 +188,7 @@ They cover snapshot isolation, excludes, metadata fidelity (mode, owner, mtime,
 symlinks, xattrs), incremental parents, local and repository retention, hook
 failure and signal handling, SIGKILL mid-run (no leaked mounts, GC reclaims the
 orphans), files staying individually intact while writers churn two subvolumes,
-the run lock, repository safety against a concurrent rustic prune, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
+the run lock, a repository on a privately mounted filesystem, repository safety against a concurrent rustic prune, in-subvolume staging, nested subvolumes, `ls`/`dump`/`--as-subvolume`,
 and an official `restic check --read-data` of the repository rbtrfs wrote.
 
 ## Development spikes

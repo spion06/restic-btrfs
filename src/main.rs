@@ -11,15 +11,17 @@ use rbtrfs::cli::{Cli, Command};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Reading the config spawns no threads, so it is safe before the namespace.
+    let profile = cli.profile()?;
 
-    if cli.command.needs_root() && !rbtrfs::is_root() {
+    if cli.command.needs_root(profile.as_ref()) && !rbtrfs::is_root() {
         anyhow::bail!("`{}` needs root", command_name(&cli.command));
     }
-    if cli.command.needs_namespace() {
+    if cli.command.needs_namespace(profile.as_ref()) {
         rbtrfs::ns::enter_private_namespace().context("entering private mount namespace")?;
     }
 
-    rbtrfs::cli::run(cli)
+    rbtrfs::cli::run(cli, profile)
 }
 
 fn command_name(c: &Command) -> &'static str {

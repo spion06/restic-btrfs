@@ -190,6 +190,18 @@ restic-btrfs/
   tests/e2e_loopback.rs  # loopback-btrfs end-to-end tests (containerised when not root)
 ```
 
+## Repository on a network filesystem
+
+The repository is whatever `repository` names; rustic_core opens a local path as a path. For a share
+that isn't mounted on the host, `[profile.x.repository_mount]` (`type`, `source`, optional `options`,
+`target`) makes rbtrfs run `mount -t <type> [-o <options>] <source> <target>` inside its private mount
+namespace before the repository is opened, and `repository` must lie below `target`. `mount(8)` rather
+than `mount(2)` is used so helpers like `mount.nfs` can resolve hostnames and negotiate options. The
+mount is private (never in the host table) and dies with the process. Consequence: the config is loaded
+before the namespace decision, and when a mount is configured *every* command that opens the repository
+enters the namespace and therefore needs root. Verified with a second loop-device filesystem the host
+never mounts; a real NFS server is not part of the test suite.
+
 ## CLI
 
 ```

@@ -3,6 +3,13 @@
 
 [profile.default]
 repository = "/mnt/backup/restic"
+# Repository on a share that is not mounted on the host? Let rbtrfs mount it privately
+# for the run, and point `repository` at a path below the target:
+#   repository = "/run/rbtrfs/repo/restic/mybox"
+#   [profile.default.repository_mount]    # (place this table after the plain keys)
+#   type = "nfs"
+#   source = "nas.local:/export/backups"
+#   options = "vers=4.2"
 password_file = "/etc/rbtrfs/repo.pw"
 subvolumes = ["/", "/home", "/srv"]
 # Excludes work like restic's: "/path" is as recorded in the backup; anything else matches at any depth.

@@ -26,6 +26,23 @@ impl Cli {
         let cfg = Config::load(&path)?;
         cfg.profile(name).cloned()
     }
+
+    /// The profile this command works on (`None` for `discover`). Loaded before
+    /// the mount namespace decision, since a `repository_mount` makes every
+    /// command that opens the repository need one.
+    pub fn profile(&self) -> Result<Option<crate::config::Profile>> {
+        use Command::*;
+        match &self.command {
+            Discover { .. } => Ok(None),
+            Backup { profile, .. }
+            | Snapshots { profile, .. }
+            | Restore { profile, .. }
+            | Ls { profile, .. }
+            | Dump { profile, .. }
+            | Forget { profile, .. }
+            | Gc { profile, .. } => self.load_profile(profile).map(Some),
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -142,26 +159,35 @@ pub enum Command {
 impl Command {
     /// `forget` mutates the repository and must hold the run lock (in /run), so
     /// it needs root even though it touches no btrfs.
-    pub fn needs_root(&self) -> bool {
-        self.needs_namespace() || matches!(self, Command::Forget { .. })
+    pub fn needs_root(&self, profile: Option<&crate::config::Profile>) -> bool {
+        self.needs_namespace(profile) || matches!(self, Command::Forget { .. })
     }
 
-    /// Does this command need a private mount namespace (and thus root)?
-    pub fn needs_namespace(&self) -> bool {
+    /// Does this command need a private mount namespace (and thus root)? Backup
+    /// and gc mount the top-level subvolume; any command that opens the
+    /// repository needs one when the profile mounts the repository's filesystem.
+    pub fn needs_namespace(&self, profile: Option<&crate::config::Profile>) -> bool {
+        let mounts_repo = profile.is_some_and(|p| p.repository_mount.is_some());
         match self {
-            // A dry run only reads mountinfo and the repository.
-            Command::Backup { dry_run, .. } => !dry_run,
+            Command::Backup { dry_run, .. } => !dry_run || mounts_repo,
             Command::Gc { .. } => true,
-            _ => false,
+            Command::Discover { .. } => false,
+            _ => mounts_repo,
         }
     }
 }
 
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
+    // Mounted (privately) before anything opens the repository; unmounted on drop.
+    let _repository_mount = match loaded.as_ref().and_then(|p| p.repository_mount.as_ref()) {
+        Some(spec) => Some(crate::ns::RepositoryMount::mount(spec)?),
+        None => None,
+    };
+
     match &cli.command {
         Command::Discover { json } => discover_cmd(*json),
-        Command::Backup { profile, dry_run } => {
-            let p = cli.load_profile(profile)?;
+        Command::Backup { dry_run, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             let outcome = backup::run(&p, *dry_run).context("backup run")?;
             if !*dry_run {
                 println!(
@@ -171,8 +197,8 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Command::Gc { profile, keep_local, keep_local_days, all_keys } => {
-            let p = cli.load_profile(profile)?;
+        Command::Gc { keep_local, keep_local_days, all_keys, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             let retention = crate::snapshot::LocalRetention::new(
                 keep_local.unwrap_or(p.keep_local),
                 keep_local_days.or(p.keep_local_days),
@@ -189,25 +215,25 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Command::Snapshots { profile, all } => {
-            let p = cli.load_profile(profile)?;
+        Command::Snapshots { all, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::list(&p, *all)
         }
-        Command::Restore { profile, snapshot, subvol, target, host, any_host, as_subvolume } => {
-            let p = cli.load_profile(profile)?;
+        Command::Restore { snapshot, subvol, target, host, any_host, as_subvolume, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             let host = host_filter(host, *any_host);
             crate::restore::restore(&p, snapshot, subvol, target, &host, *as_subvolume)
         }
-        Command::Ls { profile, snapshot, path, host, any_host } => {
-            let p = cli.load_profile(profile)?;
+        Command::Ls { snapshot, path, host, any_host, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::ls(&p, snapshot, path, &host_filter(host, *any_host))
         }
-        Command::Dump { profile, snapshot, path, host, any_host } => {
-            let p = cli.load_profile(profile)?;
+        Command::Dump { snapshot, path, host, any_host, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::dump(&p, snapshot, path, &host_filter(host, *any_host))
         }
-        Command::Forget { profile, prune, instant_delete, allow_unsafe, dry_run } => {
-            let p = cli.load_profile(profile)?;
+        Command::Forget { prune, instant_delete, allow_unsafe, dry_run, .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
             if *instant_delete && !*allow_unsafe && !*dry_run {
                 use std::io::IsTerminal;
                 let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
