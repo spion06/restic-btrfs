@@ -35,9 +35,14 @@ concurrency:
 
 env:
   GIT_CLIFF_VERSION: v2.14.2
+  # sha256 of the x86_64 linux tarball of that version; update both together
+  GIT_CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
 
 jobs:
   prepare:
+    # The button must be pressed on main: the release commit is fast-forwarded onto it.
+    # (A pushed tag is checked out as is.)
+    if: ${{ github.event_name == 'push' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # pushes the release branch
@@ -45,17 +50,19 @@ jobs:
       version: ${{ steps.prepare.outputs.version || steps.tagged.outputs.version }}
       sha: ${{ steps.commit.outputs.sha || steps.tagged.outputs.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         if: ${{ github.event_name == 'workflow_dispatch' }}
       - name: Install git-cliff
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           v="${GIT_CLIFF_VERSION#v}"
-          curl -sSfL "https://github.com/orhun/git-cliff/releases/download/${GIT_CLIFF_VERSION}/git-cliff-${v}-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar -xz --strip-components=1 -C /usr/local/bin "git-cliff-${v}/git-cliff"
+          curl -sSfL -o git-cliff.tar.gz "https://github.com/orhun/git-cliff/releases/download/${GIT_CLIFF_VERSION}/git-cliff-${v}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum --check
+          sudo tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin "git-cliff-${v}/git-cliff"
+          rm git-cliff.tar.gz
           git-cliff --version
       - name: Work out the next version
         id: prepare
@@ -96,13 +103,14 @@ jobs:
           git commit -m "chore(release): v${VERSION}"
           git push --force origin "HEAD:refs/heads/release/v${VERSION}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !inputs.dry_run }}
         with:
           name: release-notes
           path: release-notes.md
 
   ci:
+    needs: [prepare]
     if: ${{ !inputs.dry_run }}
     uses: ./.github/workflows/ci.yml
 
@@ -117,11 +125,12 @@ jobs:
     name: build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # Built on Ubuntu 22.04 so the binary only needs glibc 2.34. That image's
       # libbtrfsutil header is too old for the crate, so build a newer one; at runtime
       # any libbtrfsutil.so.1 from btrfs-progs 5.16 or newer works.
@@ -145,7 +154,7 @@ jobs:
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE examples/config.toml "$pkg/"
           tar czf "$pkg.tar.gz" "$pkg"
           sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.name }}
           path: rbtrfs-*.tar.gz*
@@ -156,10 +165,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
