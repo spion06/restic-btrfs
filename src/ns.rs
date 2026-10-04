@@ -66,9 +66,11 @@ impl TransientMount {
 
 impl Drop for TransientMount {
     fn drop(&mut self) {
+        // Only unmount. The (empty) mount-point directory is deliberately left in place:
+        // it lives on the shared /run, and removing a directory detaches mounts on it in
+        // every other mount namespace, which would pull the mount out from under another
+        // rbtrfs process using the same path.
         let _ = umount2(&self.target, MntFlags::MNT_DETACH);
-        // Only succeeds once the (private) mount is gone; leaves no stray dir in /run.
-        let _ = std::fs::remove_dir(&self.target);
     }
 }
 
@@ -112,7 +114,7 @@ impl RepositoryMount {
 
 impl Drop for RepositoryMount {
     fn drop(&mut self) {
+        // See TransientMount: never remove the directory, other processes may be using it.
         let _ = umount2(&self.target, MntFlags::MNT_DETACH);
-        let _ = std::fs::remove_dir(&self.target);
     }
 }

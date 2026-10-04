@@ -2025,3 +2025,52 @@ fn marker_files_and_xattrs_exclude_directories() {
     fx.ok(&["backup"]);
     assert_eq!(restore("r3"), ["cache", "custom", "keep", "tagged"]);
 }
+
+#[test]
+fn another_rbtrfs_process_does_not_pull_the_repository_out_from_under_a_backup() {
+    e2e!();
+    // Every process mounts the repository share at the same private path. On exit one
+    // used to remove that directory, which on Linux also detaches the mount in other
+    // mount namespaces, killing a backup that was still using it.
+    let fx = Fx::new("mountrace", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("f.txt"), b"x").unwrap();
+    let img = fx.base().join("repo.img");
+    sh(&format!(
+        "truncate -s 256M '{0}' && mkfs.btrfs -qf '{0}'",
+        img.display()
+    ));
+    let dev = sh(&format!("losetup --find --show '{}'", img.display()))
+        .trim()
+        .to_string();
+    let target = fx.base().join("repo-mnt");
+    fs::write(
+        &fx.cfg,
+        format!(
+            "[profile.default]\nrepository = \"restic/box\"\npassword = \"pw\"\nsubvolumes = [\"{a}\"]\n\
+             [profile.default.hooks]\npre = [\"sleep 4\"]\n\
+             [profile.default.repository_mount]\ntype = \"btrfs\"\nsource = \"{dev}\"\ntarget = \"{t}\"\n",
+            a = a.display(),
+            t = target.display()
+        ),
+    )
+    .unwrap();
+
+    // the backup opens the repository, then waits in the hook, then needs it again
+    let backup = fx
+        .cmd(&["backup"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(2000));
+    // meanwhile other processes mount and unmount the same path, and one hits the lock
+    let _ = fx.run(&["snapshots"]);
+    let _ = fx.run(&["backup"]);
+    let out = backup.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "the running backup lost its repository:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
