@@ -1,0 +1,46 @@
+# git-cliff configuration: next version and changelog from conventional commits.
+# See docs in CONTRIBUTING.md. Used by .github/workflows/release.yml.
+
+[changelog]
+# The file header lives in CHANGELOG.md itself; git-cliff only writes the sections.
+header = ""
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}**Breaking:** {% endif %}{% if commit.scope %}{{ commit.scope }}: {% endif %}{{ commit.message | upper_first | split(pat="\n") | first | trim }}\
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# Commits that are not conventional (everything before this was adopted) are ignored.
+filter_unconventional = true
+split_commits = false
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+topo_order = false
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^(perf|refactor)", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^chore\\(deps", group = "Dependencies" },
+  { message = "^(chore|ci|test|style|build)", skip = true },
+]
+
+[bump]
+# Cargo's rules for 0.x: a breaking change bumps the minor version; features and fixes
+# bump the patch version. 1.0.0 is a deliberate manual release.
+features_always_bump_minor = false
+breaking_always_bump_major = false
+initial_tag = "0.1.0"

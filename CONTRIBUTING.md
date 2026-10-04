@@ -39,12 +39,42 @@ from `docs/` (`book.toml`, `docs/SUMMARY.md`). To preview it, install mdBook and
 - Update the README, `docs/` and `CHANGELOG.md` when behaviour changes.
 - Prefer small commits with a message explaining the why.
 
+## Commit messages
+
+Releases are versioned and the changelog is written from commit messages, so use
+[conventional commits](https://www.conventionalcommits.org/):
+
+| Prefix | Use for | Version bump |
+|---|---|---|
+| `feat:` | a new feature or option | patch |
+| `fix:` | a bug fix | patch |
+| `feat!:` or `fix!:` (or `BREAKING CHANGE:` in the body) | a change that breaks existing configs or behaviour | minor |
+| `docs:`, `perf:`, `refactor:` | shown in the changelog | patch |
+| `chore:`, `ci:`, `test:`, `build:`, `style:` | not shown in the changelog | none |
+
+An optional scope goes in brackets, for example `fix(restore): handle a missing target`.
+While the version is below 1.0 a breaking change bumps the minor number and everything
+else bumps the patch number (the same rules Cargo uses). Going to 1.0.0 is a deliberate,
+manual release. Commits that are not conventional are ignored by the changelog.
+
 ## Releasing
 
-Update `version` in `Cargo.toml` and move the `CHANGELOG.md` entries under the new
-version, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`).
-The release workflow runs CI, builds x86_64 and aarch64 Linux tarballs (binary, man
-page, completions, licences) and publishes them as a GitHub release.
+Releases are made from the Actions tab: **release → Run workflow**.
+
+- **bump** is `auto` (work out the version from the commits since the last tag) or a
+  forced `patch`, `minor` or `major`.
+- **dry run** only shows the next version and the changelog entry in the run summary
+  and publishes nothing. Do this first.
+
+A real run bumps `version` in `Cargo.toml` and `Cargo.lock`, writes the new section
+into `CHANGELOG.md`, builds the x86_64 and aarch64 tarballs from that commit, and runs
+the CI checks. Only if all of that passes does it push the release commit to `main`,
+tag it and publish the GitHub release, with the changelog section as the notes. If
+anything fails, `main` is untouched and you can simply run it again. With `auto` and no
+`feat`, `fix`, `docs`, `perf` or `refactor` commits since the last tag it stops with
+"nothing to release".
+
+The configuration is in `cliff.toml` (git-cliff) and `.github/scripts/prepare-release.sh`.
 
 See [`docs/architecture.md`](docs/architecture.md) for how the pieces fit.
 

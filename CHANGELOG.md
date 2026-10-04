@@ -1,11 +1,9 @@
 # Changelog
 
-All notable changes are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes are documented here. Entries from 0.1.1 on are generated from
+commit messages when a release is made; see [CONTRIBUTING.md](CONTRIBUTING.md#releasing).
 
-## [Unreleased]
-
-## [0.1.0] - 2026-10-04
+## 0.1.0 - 2026-10-04
 
 First release.
 
@@ -49,6 +47,3 @@ First release.
 - Config file format documented; unknown keys are errors at every level.
 - Documentation site, command reference generated from the CLI, release tarballs for
   Linux x86_64 and aarch64.
-
-[Unreleased]: https://github.com/spion06/restic-btrfs/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/spion06/restic-btrfs/releases/tag/v0.1.0

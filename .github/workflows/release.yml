@@ -1,19 +1,92 @@
 name: release
 
-# Push a tag like v0.1.0 (matching `version` in Cargo.toml) to build and publish.
+# Manual release: Actions > release > Run workflow.
+#
+# Works out the next version from the conventional commits since the last tag (or
+# uses the bump you choose), updates Cargo.toml, Cargo.lock and CHANGELOG.md, builds
+# the tarballs from that commit, and only when everything has passed pushes the
+# release commit to main, tags it and publishes the release. If anything fails, main
+# is left alone. Run it once with "dry run" ticked to see the version and changelog.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (auto = from the commits since the last tag)"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      dry_run:
+        description: "Only show the next version and changelog; publish nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GIT_CLIFF_VERSION: v2.14.2
+
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # pushes the release branch
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install git-cliff
+        run: |
+          v="${GIT_CLIFF_VERSION#v}"
+          curl -sSfL "https://github.com/orhun/git-cliff/releases/download/${GIT_CLIFF_VERSION}/git-cliff-${v}-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xz --strip-components=1 -C /usr/local/bin "git-cliff-${v}/git-cliff"
+          git-cliff --version
+      - name: Work out the next version
+        id: prepare
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: .github/scripts/prepare-release.sh "$BUMP"
+      - name: Show the plan
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          {
+            echo "## Release v${VERSION}"
+            echo
+            cat release-notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit the release to a branch
+        id: commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git commit -m "chore(release): v${VERSION}"
+          git push --force origin "HEAD:refs/heads/release/v${VERSION}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !inputs.dry_run }}
+        with:
+          name: release-notes
+          path: release-notes.md
+
   ci:
+    if: ${{ !inputs.dry_run }}
     uses: ./.github/workflows/ci.yml
 
   build:
-    needs: ci
+    needs: [prepare, ci]
     strategy:
       fail-fast: false
       matrix:
@@ -24,6 +97,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Built on Ubuntu 22.04 so the binary only needs glibc 2.34. That image's
@@ -34,14 +109,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git build-essential pkg-config libclang-dev
           .github/scripts/install-libbtrfsutil.sh
-      - name: Tag must match the crate version
-        run: |
-          crate="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
-          test "v$crate" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != crate v$crate"; exit 1; }
       - run: cargo build --release --locked
       - name: Package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          pkg="rbtrfs-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          test "$(./target/release/rbtrfs --version)" = "rbtrfs ${VERSION}"
+          pkg="rbtrfs-v${VERSION}-${{ matrix.name }}"
           mkdir -p "$pkg/completions"
           install -m755 target/release/rbtrfs "$pkg/"
           strip "$pkg/rbtrfs"
@@ -56,26 +130,35 @@ jobs:
           path: rbtrfs-*.tar.gz*
 
   publish:
-    needs: build
+    needs: [prepare, ci, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Create GitHub release
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          # release notes: this version's section of CHANGELOG.md
-          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} /^\[[^]]*\]: / {next} f' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "no CHANGELOG.md section for $version"; exit 1; }
+          # Fast-forward main to the release commit. Fails, leaving main alone, if main
+          # has moved since the release was prepared: just run the workflow again.
+          git fetch origin "release/v${VERSION}"
+          git merge --ff-only "$SHA"
+          git push origin HEAD:main
+
+          mv dist/release-notes.md notes.md
           printf '\nBinaries link dynamically against libbtrfsutil (package btrfs-progs or libbtrfsutil1, version 5.16 or newer) and need glibc 2.34 or newer.\n' >> notes.md
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          gh release create "v${VERSION}" dist/*.tar.gz dist/*.sha256 \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
+            --target "$SHA" \
+            --title "v${VERSION}" \
             --notes-file notes.md
+          git push origin --delete "release/v${VERSION}" || true
