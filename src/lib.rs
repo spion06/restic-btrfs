@@ -37,6 +37,7 @@ pub mod ns;
 pub mod priority;
 pub mod repo;
 pub mod restore;
+pub mod rootmeta;
 pub mod runid;
 pub mod select;
 pub mod signals;

@@ -68,6 +68,15 @@ fn locate<S: IndexedTree>(
     path: &Path,
     host: &HostFilter,
 ) -> Result<Node> {
+    locate_in(repo, snapshot, path, host).map(|(_, node)| node)
+}
+
+fn locate_in<S: IndexedTree>(
+    repo: &Repository<S>,
+    snapshot: &str,
+    path: &Path,
+    host: &HostFilter,
+) -> Result<(rustic_core::repofile::SnapshotFile, Node)> {
     let tree_path = path.to_string_lossy();
     let tree_path = tree_path.trim_matches('/');
     let want_host = match host {
@@ -75,12 +84,18 @@ fn locate<S: IndexedTree>(
         HostFilter::Named(h) => Some(h.clone()),
         HostFilter::Any => None,
     };
-    repo.node_from_snapshot_path(&format!("{snapshot}:{tree_path}"), |s| {
-        snapshot != "latest"
-            || (!s.tags.iter().any(|t| t == PART_TAG)
-                && want_host.as_ref().is_none_or(|h| &s.hostname == h))
-    })
-    .with_context(|| format!("locating /{tree_path} in snapshot {snapshot}"))
+    let context = || format!("locating /{tree_path} in snapshot {snapshot}");
+    let snap = repo
+        .get_snapshot_from_str(snapshot, |s| {
+            snapshot != "latest"
+                || (!s.tags.iter().any(|t| t == PART_TAG)
+                    && want_host.as_ref().is_none_or(|h| &s.hostname == h))
+        })
+        .with_context(context)?;
+    let node = repo
+        .node_from_snapshot_path(&format!("{}:{tree_path}", snap.id), |_| true)
+        .with_context(context)?;
+    Ok((snap, node))
 }
 
 /// `ls`: print the entries below `path` in a snapshot.
@@ -144,6 +159,9 @@ pub fn dump(profile: &Profile, snapshot: &str, path: &Path, host: &HostFilter) -
 /// `target` is first created as a new btrfs subvolume (root, and `target` must be
 /// on btrfs and not exist yet), so the subvolume boundary survives the restore.
 /// Subvolumes that were nested inside it are restored as plain directories.
+///
+/// Owners are restored by numeric id unless `by_name`; without root ownership is left
+/// alone.
 pub fn restore(
     profile: &Profile,
     snapshot: &str,
@@ -151,12 +169,13 @@ pub fn restore(
     target: &Path,
     host: &HostFilter,
     as_subvolume: bool,
+    by_name: bool,
 ) -> Result<()> {
     use crate::btrfs::{BtrfsOps, LibBtrfsUtil};
 
     let handle = RepoHandle::from_profile(profile)?;
     let repo = handle.open()?.to_indexed().context("indexing repository")?;
-    let node = locate(&repo, snapshot, subvol, host)?;
+    let (snap, node) = locate_in(&repo, snapshot, subvol, host)?;
 
     let created = if as_subvolume {
         if !node.is_dir() {
@@ -183,13 +202,21 @@ pub fn restore(
             .context("streaming snapshot contents")?;
         let dest = LocalDestination::new(&target.to_string_lossy(), true, !node.is_dir())
             .with_context(|| format!("preparing destination {}", target.display()))?;
-        let opts = RestoreOptions::default();
+        let opts = RestoreOptions::default()
+            .numeric_id(!by_name)
+            .no_ownership(!crate::is_root());
         let plan = repo
             .prepare_restore(&opts, streamer.clone(), &dest, false)
             .context("preparing restore")?;
         repo.restore(plan, &opts, streamer, &dest)
             .context("restoring")
     })();
+
+    let result = result.map(|()| {
+        if node.is_dir() {
+            restore_roots(&snap, subvol, target, by_name);
+        }
+    });
 
     if let Err(e) = result {
         if created {
@@ -204,4 +231,28 @@ pub fn restore(
         target.display()
     );
     Ok(())
+}
+
+/// rustic restores the contents but not the metadata of the backup roots (see
+/// [`crate::rootmeta`]). Put back the recorded metadata of `subvol` and of every
+/// backup root below it. A failure is a warning: the files are already restored.
+fn restore_roots(
+    snap: &rustic_core::repofile::SnapshotFile,
+    subvol: &Path,
+    target: &Path,
+    by_name: bool,
+) {
+    let roots = crate::rootmeta::decode(snap.description.as_deref());
+    for (recorded, meta) in &roots {
+        let Ok(rel) = Path::new(recorded).strip_prefix(subvol) else {
+            continue;
+        };
+        let dir = target.join(rel);
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Err(e) = crate::rootmeta::apply(&dir, meta, by_name) {
+            eprintln!("rbtrfs: warning: {e:#}");
+        }
+    }
 }

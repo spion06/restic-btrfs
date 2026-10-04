@@ -9,6 +9,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 static WARNINGS: AtomicUsize = AtomicUsize::new(0);
+static VANISHED: AtomicUsize = AtomicUsize::new(0);
+static UNREADABLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Why the backup engine left something out, from its warning text. rustic_core
+/// reports every skipped entry as `ignoring error: ...`.
+#[derive(Debug, PartialEq, Eq)]
+enum Skip {
+    /// The file was gone by the time it was read: normal for a live directory.
+    Vanished,
+    /// Anything else (permissions, I/O errors, ...): data is missing from the backup.
+    Unreadable,
+}
+
+fn classify(message: &str) -> Option<Skip> {
+    let rest = message.strip_prefix("ignoring error")?;
+    Some(
+        if rest.contains("No such file or directory") || rest.contains("os error 2)") {
+            Skip::Vanished
+        } else {
+            Skip::Unreadable
+        },
+    )
+}
 
 struct Logger;
 
@@ -22,6 +45,11 @@ impl Log for Logger {
             return;
         }
         WARNINGS.fetch_add(1, Ordering::Relaxed);
+        match classify(&r.args().to_string()) {
+            Some(Skip::Vanished) => VANISHED.fetch_add(1, Ordering::Relaxed),
+            Some(Skip::Unreadable) => UNREADABLE.fetch_add(1, Ordering::Relaxed),
+            None => 0,
+        };
         let label = if r.level() == Level::Error {
             "error"
         } else {
@@ -44,8 +72,32 @@ pub fn warnings() -> usize {
     WARNINGS.load(Ordering::Relaxed)
 }
 
+/// Entries skipped because they disappeared while the backup ran.
+pub fn vanished() -> usize {
+    VANISHED.load(Ordering::Relaxed)
+}
+
+/// Entries skipped for any other reason: they are missing from the backup.
+pub fn unreadable() -> usize {
+    UNREADABLE.load(Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn skipped_entries_are_told_apart() {
+        use super::{classify, Skip};
+        assert_eq!(
+            classify("ignoring error: No such file or directory (os error 2)"),
+            Some(Skip::Vanished)
+        );
+        assert_eq!(
+            classify("ignoring error: Permission denied (os error 13)"),
+            Some(Skip::Unreadable)
+        );
+        assert_eq!(classify("error determining backup size"), None);
+    }
+
     #[test]
     fn warnings_from_the_backup_engine_are_counted() {
         super::init();

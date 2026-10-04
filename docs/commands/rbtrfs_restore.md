@@ -44,6 +44,10 @@ Take `latest` from any host.
 
 Create the target as a new btrfs subvolume. Needs root, and the target must be on btrfs and must not exist.
 
+### `--by-name`
+
+Restore owners by user and group name instead of numeric id. Numeric ids are the default: they are right for a restore onto the same system or a rebuilt one with the same ids, and do not depend on the names existing.
+
 ### `-c, --config <CONFIG>`
 
 Config file. Defaults to $RBTRFS_CONFIG, then /etc/rbtrfs/config.toml.

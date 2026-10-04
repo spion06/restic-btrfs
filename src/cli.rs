@@ -141,6 +141,11 @@ pub enum Command {
         /// must be on btrfs and must not exist.
         #[arg(long)]
         as_subvolume: bool,
+        /// Restore owners by user and group name instead of numeric id. Numeric ids
+        /// are the default: they are right for a restore onto the same system or a
+        /// rebuilt one with the same ids, and do not depend on the names existing.
+        #[arg(long)]
+        by_name: bool,
     },
     /// List the contents of a backup.
     Ls {
@@ -366,11 +371,12 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             host,
             any_host,
             as_subvolume,
+            by_name,
             ..
         } => {
             let p = loaded.clone().expect("profile loaded for this command");
             let host = host_filter(host, *any_host);
-            crate::restore::restore(&p, snapshot, subvol, target, &host, *as_subvolume)
+            crate::restore::restore(&p, snapshot, subvol, target, &host, *as_subvolume, *by_name)
         }
         Command::Ls {
             snapshot,

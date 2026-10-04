@@ -23,9 +23,10 @@ through the repository.
 
 `rbtrfs forget` thins the repository according to the profile's `retention` table.
 It works per host and only looks at backups that rbtrfs made, so your other restic
-snapshots are never touched. Profiles are not told apart: if several profiles back up
-to one repository from the same host, `forget` applies one policy to all their
-backups together. Give each profile its own repository. It also removes the per-subvolume snapshots that
+snapshots are never touched. Backups carry a tag with the name of the profile that made them
+(`rbtrfs:profile=NAME`), and `forget` only looks at its own profile's, so profiles can
+share a repository and keep different retention. Backups made before the tag existed
+count as profile `default`. It also removes the per-subvolume snapshots that
 `rbtrfs snapshots --all` shows, except those from the newest run (or later), which
 the next backup needs.
 

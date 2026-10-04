@@ -54,8 +54,10 @@ snapshots are deleted according to `keep_local`.
 `latest` is the newest backup from this host. To restore onto a different
 machine, use `--host OLDNAME` or `--any-host`.
 
-`restore` writes plain files. Run it as root to get the original owners back. Add
-`--as-subvolume` to create the target as a new btrfs subvolume instead; the target
+`restore` writes plain files. Run it as root to get the original owners back; they
+are restored by numeric id, or by user and group name with `--by-name`. The mode,
+owner and modification time of the restored directory itself, and of every subvolume
+mount point inside it, are put back as they were. Add `--as-subvolume` to create the target as a new btrfs subvolume instead; the target
 must be on btrfs and must not exist yet. Subvolumes that were nested inside the one
 you restore come back as plain directories.
 
@@ -168,6 +170,11 @@ shutdown has not been tested. A shutdown does not wait longer than `TimeoutStopS
 - `0`: success
 - `1`: the command failed
 - `2`: bad command line
+- `3`: the backup completed, but some files vanished while they were being read
+  (only possible for `extra_paths`, which are read live). The rest was backed up.
+
+A backup that could not read a file for any other reason, such as a permission error,
+exits with `1`: the snapshot is saved but incomplete.
 
 A backup that fails removes the local snapshots it took. A backup that is killed
 (SIGKILL, power loss) cannot, so its snapshots stay. They count as an ordinary set, and

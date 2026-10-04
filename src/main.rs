@@ -6,10 +6,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::process::ExitCode;
 
 use rbtrfs::cli::{Cli, Command};
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     // Reading the config spawns no threads, so it is safe before the namespace.
     let profile = cli.profile()?;
@@ -43,7 +44,26 @@ fn main() -> Result<()> {
     }
 
     rbtrfs::logging::init();
-    rbtrfs::cli::run(cli, profile)
+    rbtrfs::cli::run(cli, profile)?;
+    Ok(exit_code())
+}
+
+/// 0, unless the backup engine skipped entries. Files that vanished while a live
+/// directory was read give 3, like restic. Anything else that could not be read means
+/// the backup is incomplete, which is a failure.
+fn exit_code() -> ExitCode {
+    let (gone, bad) = (rbtrfs::logging::vanished(), rbtrfs::logging::unreadable());
+    if bad > 0 {
+        eprintln!("rbtrfs: error: {bad} file(s) could not be read; the backup is incomplete");
+        return ExitCode::from(1);
+    }
+    if gone > 0 {
+        eprintln!(
+            "rbtrfs: {gone} file(s) vanished while they were being read; the rest was backed up"
+        );
+        return ExitCode::from(3);
+    }
+    ExitCode::SUCCESS
 }
 
 fn command_name(c: &Command) -> &'static str {

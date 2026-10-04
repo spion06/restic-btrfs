@@ -32,6 +32,10 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    /// The profile's name in the config file (filled in by [`Config::load`]).
+    #[serde(skip)]
+    pub name: String,
+
     /// restic repository location (`/path`, `rest:`, `s3:…`, `sftp:…`, …).
     pub repository: String,
 
@@ -339,6 +343,7 @@ impl Config {
         let mut cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
         for (name, p) in cfg.profile.iter_mut() {
+            p.name = name.clone();
             p.resolve_repository_path()
                 .with_context(|| format!("profile [{name}]"))?;
         }

@@ -108,8 +108,11 @@ pub struct SnapJob {
 pub fn burst(btrfs: &dyn BtrfsOps, jobs: &[SnapJob]) -> Result<()> {
     for j in jobs {
         let parent = j.dest.parent().expect("dest has parent");
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        // `<staging>/<key>`; its parent is the staging directory itself
+        if let Some(staging) = parent.parent() {
+            private_dir(staging)?;
+        }
+        private_dir(parent)?;
         if j.dest.exists() {
             anyhow::bail!("snapshot destination already exists: {}", j.dest.display());
         }
@@ -136,6 +139,50 @@ pub fn discard(btrfs: &dyn BtrfsOps, jobs: &[SnapJob]) {
             );
         }
     }
+}
+
+/// Make sure `dir` is a real directory owned by the user we run as, creating it
+/// (mode 0700) if it does not exist. A symlink or a directory owned by someone else
+/// could point where snapshots are made, or which subvolumes `gc` deletes, to a place
+/// of that user's choosing; `in-subvolume` staging lives somewhere users may write.
+fn private_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => trusted_dir(dir),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(dir)
+                .with_context(|| format!("creating {}", dir.display()))?;
+            let m = std::fs::symlink_metadata(dir)?;
+            anyhow::ensure!(
+                m.uid() == nix::unistd::geteuid().as_raw(),
+                "{} is not ours",
+                dir.display()
+            );
+            Ok(())
+        }
+        Err(e) => Err(e).with_context(|| format!("checking {}", dir.display())),
+    }
+}
+
+/// `dir` exists, is not a symlink, is a directory and belongs to us.
+fn trusted_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m =
+        std::fs::symlink_metadata(dir).with_context(|| format!("checking {}", dir.display()))?;
+    anyhow::ensure!(
+        m.is_dir() && !m.file_type().is_symlink(),
+        "{} must be a plain directory, not a symlink or file",
+        dir.display()
+    );
+    anyhow::ensure!(
+        m.uid() == nix::unistd::geteuid().as_raw(),
+        "{} is owned by uid {}, not by us; refusing to use it",
+        dir.display(),
+        m.uid()
+    );
+    Ok(())
 }
 
 /// Which local snapshot sets survive a GC.
@@ -176,6 +223,9 @@ pub fn gc(
     retention: &LocalRetention,
 ) -> Result<GcReport> {
     let mut report = GcReport::default();
+    if staging_root.symlink_metadata().is_ok() {
+        trusted_dir(staging_root)?;
+    }
     let key_dirs = match std::fs::read_dir(staging_root) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(report),
@@ -189,11 +239,16 @@ pub fn gc(
             (Some(keys), Some(name)) => keys.iter().any(|k| k == name),
             (Some(_), None) => false,
         };
-        if !owned || !key_dir.is_dir() {
+        if !owned || !key_dir.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        if let Err(e) = trusted_dir(&key_dir) {
+            eprintln!("rbtrfs: warning: gc: skipping {e:#}");
             continue;
         }
         let mut runs: Vec<(u64, PathBuf)> = std::fs::read_dir(&key_dir)?
             .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|t| !t.is_symlink()))
             .filter_map(|e| {
                 let name = e.file_name();
                 let secs = runid::to_unix(name.to_str()?)?;
@@ -401,5 +456,58 @@ mod tests {
             fake.snapshots.borrow().is_empty(),
             "nothing snapshotted if any dest is bad"
         );
+    }
+
+    #[test]
+    fn gc_does_not_follow_symlinked_key_directories_or_runs() {
+        let elsewhere = staging(&[("victim", &[R1, R2, R3])]);
+        let t = tempfile::tempdir().unwrap();
+        // a key directory that is a link to somewhere else
+        std::os::unix::fs::symlink(elsewhere.path().join("victim"), t.path().join("home")).unwrap();
+        // a real key directory holding a run that is a link
+        std::fs::create_dir(t.path().join("srv")).unwrap();
+        std::os::unix::fs::symlink(
+            elsewhere.path().join("victim").join(R1),
+            t.path().join("srv").join(R1),
+        )
+        .unwrap();
+        let fake = Fake::default();
+        let r = gc(&fake, t.path(), None, &keep(0)).unwrap();
+        assert!(r.deleted.is_empty(), "{:?}", r.deleted);
+        assert!(fake.deleted.borrow().is_empty());
+    }
+
+    #[test]
+    fn gc_refuses_a_symlinked_staging_directory() {
+        let elsewhere = staging(&[("home", &[R1])]);
+        let t = tempfile::tempdir().unwrap();
+        let link = t.path().join("staging");
+        std::os::unix::fs::symlink(elsewhere.path(), &link).unwrap();
+        let fake = Fake::default();
+        assert!(gc(&fake, &link, None, &keep(0)).is_err());
+        assert!(fake.deleted.borrow().is_empty());
+    }
+
+    #[test]
+    fn burst_refuses_a_symlinked_key_directory() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let t = tempfile::tempdir().unwrap();
+        let staging = t.path().join("stage");
+        std::fs::create_dir(&staging).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), staging.join("home")).unwrap();
+        let job = SnapJob {
+            key: "home".into(),
+            record_path: "/home".into(),
+            src: "/home".into(),
+            dest: staging.join("home").join(R1),
+            staging_in_snapshot: None,
+        };
+        let fake = Fake::default();
+        assert!(burst(&fake, &[job]).is_err());
+        assert!(fake.snapshots.borrow().is_empty());
+        assert!(std::fs::read_dir(elsewhere.path())
+            .unwrap()
+            .next()
+            .is_none());
     }
 }

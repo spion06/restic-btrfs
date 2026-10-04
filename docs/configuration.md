@@ -260,3 +260,7 @@ mounts it inside its private mount namespace for the run.
 leaves that directory out of the backup. Use it if the top-level subvolume cannot be
 mounted. Profiles that back up the same subvolumes need different `staging_name`
 values.
+
+rbtrfs creates the staging directories with mode 0700 and refuses to use one that is a
+symlink or is owned by another user, so a user who can write to a subvolume cannot
+redirect where snapshots are made or which ones `gc` deletes.

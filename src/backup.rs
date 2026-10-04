@@ -16,6 +16,7 @@ use crate::excludes;
 use crate::hooks;
 use crate::lock;
 use crate::repo::RepoHandle;
+use crate::rootmeta;
 use crate::runid;
 use crate::select::{self, FilesystemSelection};
 use crate::snapshot::{self, GcReport, LocalRetention, SnapJob, StagingArea};
@@ -134,6 +135,7 @@ pub fn run(
     // Everything from the snapshot window to the merge. If any of it fails, this run's
     // snapshots are of no use (nothing in the repository refers to them): remove them
     // instead of leaving them for `rbtrfs gc`.
+    let profile_tag = format!("{}{}", crate::forget::PROFILE_TAG_PREFIX, profile.name);
     let upload = || -> Result<(Vec<SnapshotFile>, SnapshotFile)> {
         // --- consistency window ---
         // Post-hooks always run, and termination signals are deferred until they have.
@@ -160,6 +162,7 @@ pub fn run(
                 .label(format!("rbtrfs-part:{key}"))
                 .add_tags("rbtrfs:part")?
                 .add_tags(&format!("rbtrfs:run={run_id}"))?
+                .add_tags(&profile_tag)?
                 .to_snapshot()?;
             snap.hostname = crate::hostname();
             snap.time = burst_time.clone();
@@ -209,12 +212,27 @@ pub fn run(
 
         // --- merge into one snapshot (re-open so the index sees the new trees) ---
         let repo = handle.open()?.to_indexed().context("indexing for merge")?;
+        // rustic stores the backup roots with default metadata; keep the real ones.
+        let roots: rootmeta::Roots = all_jobs
+            .iter()
+            .map(|j| (&j.dest, &j.record_path))
+            .chain(extras.paths.iter().map(|e| (&e.path, &e.path)))
+            .filter_map(|(read, record)| {
+                rootmeta::capture(read)
+                    .map_err(|e| eprintln!("rbtrfs: warning: {e:#}"))
+                    .ok()
+                    .map(|m| (record.to_string_lossy().into_owned(), m))
+            })
+            .collect();
         let merged_opts = {
-            let mut o = SnapshotOptions::default().label("rbtrfs".to_string());
+            let mut o = SnapshotOptions::default()
+                .label("rbtrfs".to_string())
+                .description(rootmeta::encode(&roots));
             for tag in &profile.tags {
                 o = o.add_tags(tag)?;
             }
             o.add_tags(&format!("rbtrfs:run={run_id}"))?
+                .add_tags(&profile_tag)?
         };
         let mut merged_snap = merged_opts.to_snapshot()?;
         merged_snap.hostname = crate::hostname();

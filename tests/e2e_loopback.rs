@@ -1390,7 +1390,8 @@ fn external_rustic_forget_and_prune(
                     .open(&creds)
                     .map_err(|e| e.to_string())?;
                 let snaps = repo.get_all_snapshots().map_err(|e| e.to_string())?;
-                let plan = rbtrfs::forget::plan(snaps, &keep).map_err(|e| format!("{e:#}"))?;
+                let plan =
+                    rbtrfs::forget::plan(snaps, &keep, "default").map_err(|e| format!("{e:#}"))?;
                 let ids: Vec<_> = plan
                     .forget_merged
                     .into_iter()
@@ -2255,4 +2256,123 @@ fn the_run_lock_is_private_to_root() {
     let mode = |p: &str| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode("/run/rbtrfs"), 0o700);
     assert_eq!(mode("/run/rbtrfs/rbtrfs.lock"), 0o600);
+}
+
+#[test]
+fn restore_puts_back_the_metadata_of_the_subvolume_roots() {
+    e2e!();
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new("rootmeta", &["@outer", "@inner"]);
+    let (outer, inner_src) = (&fx.mounts[0], &fx.mounts[1]);
+    sh(&format!("umount {}", inner_src.display()));
+    let inner = outer.join("inner");
+    fs::create_dir_all(&inner).unwrap();
+    sh(&format!(
+        "mount -o subvol=@inner {} {}",
+        fx.fs.dev,
+        inner.display()
+    ));
+    fs::write(outer.join("o.txt"), b"outer").unwrap();
+    fs::write(inner.join("i.txt"), b"inner").unwrap();
+    // distinctive roots: mode, owner and mtime that rustic's default would not give
+    fs::set_permissions(outer, fs::Permissions::from_mode(0o750)).unwrap();
+    sh(&format!("chown 4321:5432 {}", outer.display()));
+    fs::set_permissions(&inner, fs::Permissions::from_mode(0o700)).unwrap();
+    sh(&format!("chown 1234:2345 {}", inner.display()));
+    sh(&format!(
+        "touch -d '2020-01-02 03:04:05' {}",
+        inner.display()
+    ));
+    sh(&format!(
+        "touch -d '2021-02-03 04:05:06' {}",
+        outer.display()
+    ));
+    // (the touch above ran after the writes, so the mtimes are as set)
+
+    let (outer_mtime, inner_mtime) = (
+        fs::metadata(outer).unwrap().mtime(),
+        fs::metadata(&inner).unwrap().mtime(),
+    );
+    assert_ne!(outer_mtime, inner_mtime);
+
+    fx.write_cfg(&[outer.clone(), inner.clone()], "");
+    fx.ok(&["backup"]);
+
+    let check = |root: &Path| {
+        let m = fs::metadata(root).unwrap();
+        assert_eq!(m.permissions().mode() & 0o7777, 0o750, "outer mode");
+        assert_eq!((m.uid(), m.gid()), (4321, 5432), "outer owner");
+        assert_eq!(m.mtime(), outer_mtime, "outer mtime");
+        let i = fs::metadata(root.join("inner")).unwrap();
+        assert_eq!(i.permissions().mode() & 0o7777, 0o700, "inner mode");
+        assert_eq!((i.uid(), i.gid()), (1234, 2345), "inner owner");
+        assert_eq!(i.mtime(), inner_mtime, "inner mtime");
+    };
+    check(&fx.restore("latest", outer, "restored"));
+
+    // and as a new subvolume
+    let target = fx.base().join("mnt/as-subvol");
+    fx.ok(&[
+        "restore",
+        "latest",
+        "--subvol",
+        &outer.to_string_lossy(),
+        "--target",
+        &target.to_string_lossy(),
+        "--as-subvolume",
+    ]);
+    check(&target);
+}
+
+#[test]
+fn forget_only_touches_its_own_profile() {
+    e2e!();
+    let fx = Fx::new("profiles", &["@a", "@b"]);
+    let (a, b) = (&fx.mounts[0], &fx.mounts[1]);
+    fs::write(a.join("f"), b"a").unwrap();
+    fs::write(b.join("f"), b"b").unwrap();
+    let profile = |name: &str, mount: &Path| {
+        format!(
+            "[profile.{name}]\nrepository = \"{}\"\npassword = \"pw\"\nsubvolumes = [\"{}\"]\n\
+             [profile.{name}.retention]\nkeep_last = 1\n",
+            fx.repo().display(),
+            mount.display()
+        )
+    };
+    fx.write_cfg_keep_repo_mount(
+        &format!("{}{}", profile("default", a), profile("other", b)),
+        "",
+    );
+    for _ in 0..2 {
+        fx.ok(&["backup", "--profile", "default"]);
+        fx.ok(&["backup", "--profile", "other"]);
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+
+    let merged_of = |profile: &str| -> usize {
+        let v: serde_json::Value =
+            serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| {
+                let tags: Vec<&str> = s["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|t| t.as_str())
+                    .collect();
+                !tags.contains(&"rbtrfs:part")
+                    && tags.contains(&format!("rbtrfs:profile={profile}").as_str())
+            })
+            .count()
+    };
+    assert_eq!((merged_of("default"), merged_of("other")), (2, 2));
+
+    fx.ok(&["forget", "--profile", "default"]);
+    assert_eq!(
+        (merged_of("default"), merged_of("other")),
+        (1, 2),
+        "the other profile keeps its backups"
+    );
 }

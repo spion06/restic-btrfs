@@ -3,7 +3,8 @@
 //! Two kinds of snapshots live in the repository (see docs/architecture.md):
 //!
 //! - **merged** snapshots (label `rbtrfs`) are the user-facing backups. They are
-//!   thinned by the profile's `[retention]` policy, per host.
+//!   thinned by the profile's `[retention]` policy, per host. Only the profile's own
+//!   snapshots are considered (see [`PROFILE_TAG_PREFIX`]).
 //! - **part** snapshots (tag `rbtrfs:part`) only exist so the next run finds a
 //!   parent. Only those of the newest run are needed; the rest are forgotten.
 //!
@@ -22,6 +23,16 @@ use crate::restore::PART_TAG;
 
 const MERGED_LABEL: &str = "rbtrfs";
 const RUN_TAG_PREFIX: &str = "rbtrfs:run=";
+/// Tag naming the profile that made a snapshot. Snapshots from before it existed
+/// belong to the profile called `default`.
+pub const PROFILE_TAG_PREFIX: &str = "rbtrfs:profile=";
+
+fn profile_of(s: &SnapshotFile) -> &str {
+    s.tags
+        .iter()
+        .find_map(|t| t.strip_prefix(PROFILE_TAG_PREFIX))
+        .unwrap_or("default")
+}
 
 fn run_of(s: &SnapshotFile) -> Option<String> {
     s.tags
@@ -44,14 +55,18 @@ pub struct Plan {
     pub kept_parts: usize,
 }
 
-pub fn plan(snaps: Vec<SnapshotFile>, keep: &rustic_core::KeepOptions) -> Result<Plan> {
+pub fn plan(
+    snaps: Vec<SnapshotFile>,
+    keep: &rustic_core::KeepOptions,
+    profile: &str,
+) -> Result<Plan> {
     let now = SnapshotFile::default().time;
     let mut plan = Plan::default();
 
     // merged snapshots: restic-style retention, per host
     let mut merged: BTreeMap<String, Vec<SnapshotFile>> = BTreeMap::new();
     let mut parts: BTreeMap<String, Vec<SnapshotFile>> = BTreeMap::new();
-    for s in snaps {
+    for s in snaps.into_iter().filter(|s| profile_of(s) == profile) {
         if is_part(&s) {
             if s.label.starts_with("rbtrfs-part:") {
                 parts.entry(s.hostname.clone()).or_default().push(s);
@@ -103,7 +118,7 @@ pub fn run(profile: &Profile, prune: bool, instant_delete: bool, dry_run: bool) 
     let handle = RepoHandle::from_profile(profile)?;
     let repo = handle.open()?;
     let snaps = repo.get_all_snapshots().context("listing snapshots")?;
-    let plan = plan(snaps, &keep)?;
+    let plan = plan(snaps, &keep, &profile.name)?;
 
     println!(
         "merged: keep {}, forget {}; parts: keep {}, forget {}",
@@ -195,7 +210,7 @@ mod tests {
     #[test]
     fn keeps_newest_merged_and_only_the_newest_runs_parts() {
         let snaps = three_runs("h");
-        let p = plan(snaps.clone(), &keep_last(2)).unwrap();
+        let p = plan(snaps.clone(), &keep_last(2), "default").unwrap();
         assert_eq!((p.kept_merged, p.forget_merged.len()), (2, 1));
         assert_eq!((p.kept_parts, p.forget_parts.len()), (2, 4));
         // the forgotten merged snapshot is the oldest one
@@ -210,7 +225,7 @@ mod tests {
     fn hosts_are_thinned_independently() {
         let mut snaps = three_runs("h1");
         snaps.extend(three_runs("h2"));
-        let p = plan(snaps, &keep_last(1)).unwrap();
+        let p = plan(snaps, &keep_last(1), "default").unwrap();
         assert_eq!(p.kept_merged, 2);
         assert_eq!(p.forget_merged.len(), 4);
         assert_eq!(p.kept_parts, 4);
@@ -221,7 +236,7 @@ mod tests {
         let mut snaps = three_runs("h");
         snaps.push(snap("h", "my-own-restic-job", "x", false, 500));
         snaps.push(snap("h", "other", "x", true, 500));
-        let p = plan(snaps.clone(), &keep_last(1)).unwrap();
+        let p = plan(snaps.clone(), &keep_last(1), "default").unwrap();
         let foreign: Vec<_> = snaps
             .iter()
             .filter(|s| s.label == "my-own-restic-job" || s.label == "other")
@@ -237,7 +252,7 @@ mod tests {
         let mut snaps = three_runs("h");
         // a 4th run died before its merge: its parts are the best parents
         snaps.push(snap("h", "rbtrfs-part:a", "20260104T000000Z", true, 0));
-        let p = plan(snaps, &keep_last(5)).unwrap();
+        let p = plan(snaps, &keep_last(5), "default").unwrap();
         assert_eq!(
             p.kept_parts, 3,
             "newest run's two parts + the unmerged run's part"
@@ -247,7 +262,29 @@ mod tests {
     #[test]
     fn no_merged_yet_keeps_all_parts() {
         let snaps = vec![snap("h", "rbtrfs-part:a", "20260101T000000Z", true, 0)];
-        let p = plan(snaps, &keep_last(1)).unwrap();
+        let p = plan(snaps, &keep_last(1), "default").unwrap();
         assert!(p.forget_parts.is_empty());
+    }
+
+    #[test]
+    fn profiles_sharing_a_repository_are_thinned_separately() {
+        let tagged = |profile: &str, run: &str, ago: i64| {
+            let mut s = snap("h", "rbtrfs", run, false, ago);
+            s.tags.add(format!("{PROFILE_TAG_PREFIX}{profile}"));
+            s
+        };
+        let snaps = vec![
+            tagged("work", "20260101T000000Z", 48),
+            tagged("work", "20260102T000000Z", 24),
+            tagged("games", "20260101T000000Z", 48),
+            // from before profile tags: belongs to "default"
+            snap("h", "rbtrfs", "20260101T000000Z", false, 48),
+        ];
+        let work = plan(snaps.clone(), &keep_last(1), "work").unwrap();
+        assert_eq!((work.kept_merged, work.forget_merged.len()), (1, 1));
+        let games = plan(snaps.clone(), &keep_last(1), "games").unwrap();
+        assert_eq!((games.kept_merged, games.forget_merged.len()), (1, 0));
+        let default = plan(snaps, &keep_last(1), "default").unwrap();
+        assert_eq!((default.kept_merged, default.forget_merged.len()), (1, 0));
     }
 }
