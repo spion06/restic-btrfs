@@ -1,6 +1,6 @@
 //! rbtrfs — consistent btrfs-snapshot backups into a restic-format repository.
 //!
-//! See `DESIGN.md` for the architecture and the Milestone 0 spike results.
+//! See `docs/architecture.md` for how it works and why.
 
 pub mod backup;
 pub mod btrfs;

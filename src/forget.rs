@@ -1,6 +1,6 @@
 //! `forget`: apply repository-side retention to what rbtrfs wrote.
 //!
-//! Two kinds of snapshots live in the repository (see DESIGN.md, Decision 3):
+//! Two kinds of snapshots live in the repository (see docs/architecture.md):
 //!
 //! - **merged** snapshots (label `rbtrfs`) are the user-facing backups. They are
 //!   thinned by the profile's `[retention]` policy, per host.

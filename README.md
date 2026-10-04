@@ -73,102 +73,36 @@ onto a rebuilt machine). `backup`, `gc` and `forget` need root.
 
 ## Configuration
 
-```toml
-[profile.default]
-repository       = "/mnt/backup/restic"
-password_command = "pass show backup/restic"   # exactly one of password / password_file / password_command
-subvolumes       = ["/home", "/srv"]
-exclude          = ["**/.cache", "*.tmp"]
-tags             = ["rbtrfs"]                  # tags on the merged snapshot
-keep_local       = 1                           # newest N local snapshot sets per subvolume
-keep_local_days  = 3                           # ...plus any younger than this (optional)
-staging          = "top-level"                 # or "in-subvolume" (see below)
+A TOML file (`/etc/rbtrfs/config.toml`, or `--config` / `$RBTRFS_CONFIG`) with named
+profiles: repository and password, `subvolumes`, `exclude`, `hooks`, `retention`,
+local-snapshot retention and optional staging and repository-mount settings. Full
+reference: **[docs/configuration.md](docs/configuration.md)**; example:
+[`examples/config.toml`](examples/config.toml).
 
-[profile.default.hooks]
-pre        = ["systemctl stop mydb"]
-post       = ["systemctl start mydb"]
-on_failure = "abort"                           # or "warn"
+`repository` can be a local path, `rest:` or `rclone:`; restic-style `sftp:`/`s3:`
+URLs are not supported (use `rclone:`). A share that isn't mounted on the host
+(NFS, CIFS, …) can be mounted privately for the run with `repository_mount`.
 
-[profile.default.retention]                    # for `rbtrfs forget`
-keep_last = 3
-keep_daily = 7
-keep_weekly = 4
-keep_monthly = 12
-keep_within = "14d"
-```
+## Safety
 
-- **Subvolumes** are chosen by mount point. Bind mounts of a subdirectory are
-  skipped, and a subvolume mounted twice is recorded once. Snapshots are not
-  recursive: a subvolume nested inside a selected one appears as an empty
-  directory, and rbtrfs warns unless you select it too.
-- **Excludes** work like restic's: `/path` is a path as recorded in the backup
-  (it applies to the subvolume that contains it), anything else matches at any
-  depth (`*.tmp`, `.cache`, `alice/.cache`), and a trailing `/` matches
-  directories only.
-- **Hooks** run inside the private namespace. `post` hooks always run once the
-  window opened, even if a `pre` hook or the snapshot failed, and
-  SIGINT/SIGTERM/SIGHUP are held until they finish, so a quiesced service is
-  thawed on failure or Ctrl-C (SIGKILL excepted).
-- **`staging = "in-subvolume"`** puts snapshots in `<mountpoint>/.rbtrfs-snapshots/`
-  (excluded from the backup) for hosts that can't mount the top-level subvolume.
-  Profiles sharing subvolumes need different `staging_name`s.
-- **Retention.** `forget` keeps merged snapshots per the policy (per host) and
-  drops the internal part snapshots older than the newest run. Snapshots rbtrfs
-  didn't create are never touched; with no `[retention]` it does nothing.
-  `--prune` also frees unreferenced data, lazily by default. `--instant-delete`
-  frees it now but is unsafe if anything else uses the repository, so it asks you
-  to type `yes` on a terminal and otherwise needs `--allow-unsafe`.
+rbtrfs runs one `backup`/`gc`/`forget` at a time per machine, but it cannot take
+restic's repository lock. **Don't run `restic prune` while a backup can be
+running**, and don't use `--instant-delete` unless nothing else touches the
+repository. Pruning with `rbtrfs forget --prune` or rustic is safe. Details and
+the tested matrix: **[docs/maintenance.md](docs/maintenance.md)**.
 
-### Repository location
+## Documentation
 
-`repository` is a local path (the only one covered by the tests), `rest:https://…`
-or `rclone:remote:path` (needs `rclone`); the latter two are accepted but untested
-here. restic-style `sftp:`/`s3:` URLs are **not** supported: reach those through
-`rclone:`. For a share that isn't mounted on the host (NFS, CIFS, …), have
-rbtrfs mount it privately for the run:
-
-```toml
-[profile.default]
-repository = "/run/rbtrfs/repo/restic/mybox"   # a path below the mount target
-
-[profile.default.repository_mount]
-type    = "nfs"                                 # anything mount(8) understands
-source  = "nas.local:/export/backups"
-options = "vers=4.2"                            # optional
-target  = "/run/rbtrfs/repo"                    # optional (default)
-```
-
-The mount is private to the process. Because it needs the namespace, **every command
-then needs root** (not just `backup`). Only a local filesystem stands in for the
-export in the tests, not a real NFS server.
-
-## Concurrency and safety
-
-One `backup`/`gc`/`forget` runs at a time per machine (`/run/rbtrfs/rbtrfs.lock`).
-rustic_core cannot take restic's repository lock, so other tools are on their own.
-Against a running `rbtrfs backup`:
-
-| other activity | safe? |
-|---|---|
-| rustic prune/forget (default options), `restic backup`, readers | yes (rustic's two-phase pruning; tested) |
-| `rbtrfs forget --prune` on the same machine | yes (run lock) |
-| **`restic prune` / `restic forget --prune`** | **no**: reproduced a missing pack while the backup exited 0 |
-| **`--instant-delete`** (any tool) | **no**: skips the two-phase safety |
-
-Prune with `rbtrfs forget --prune` (or rustic), and run restic's own prune only
-when no backup can be running.
+- [Configuration](docs/configuration.md): every key, excludes, hooks, retention, NFS
+- [Maintenance and safety](docs/maintenance.md): GC, forget/prune, concurrency, restoring
+- [Architecture](docs/architecture.md): how it works and why
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 ## Tests
 
-`cargo test` runs everything. The end-to-end tests build real btrfs filesystems on
-loop devices and need root; when you aren't root each test re-runs itself in its
-own privileged container ([testcontainers](https://crates.io/crates/testcontainers):
-no sudo, parallel, nothing touches your mounts), which needs Docker access. Without
-it they skip with a notice; `RBTRFS_E2E_REQUIRED=1` makes that an error. As root
-they run directly and need `mkfs.btrfs`, `losetup`, `setfattr` and `restic` on
-`PATH`. The suite also checks the repository with the official `restic check
---read-data` (restic 0.19). `DESIGN.md` has the architecture and decisions;
-`spikes/` holds the original proofs of concept.
+`cargo test` runs everything. The end-to-end tests use real btrfs on loop devices;
+as a normal user they re-run themselves in privileged containers (needs Docker
+access, otherwise they skip). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

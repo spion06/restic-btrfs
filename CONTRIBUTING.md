@@ -1,0 +1,31 @@
+# Contributing
+
+Issues and pull requests are welcome.
+
+## Build and test
+
+```
+cargo build
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Rust 1.91 or newer, plus the btrfs-progs headers (`libbtrfsutil`), `pkg-config` and
+libclang.
+
+The end-to-end tests need root (loop devices, mounts). When you aren't root, each
+test re-runs itself in a privileged container, so you only need access to a Docker
+daemon (your user in the `docker` group, or `DOCKER_HOST`). Without one they skip
+with a notice; set `RBTRFS_E2E_REQUIRED=1` to fail instead. As root they run
+directly and need `mkfs.btrfs`, `losetup`, `setfattr`/`getfattr` and `restic`.
+
+## Guidelines
+
+- Keep btrfs calls behind `BtrfsOps`, and keep the namespace `unshare` first in `main`.
+- A bug fix should come with a test that fails without it.
+- Update the README, `docs/` and `CHANGELOG.md` when behaviour changes.
+- Prefer small commits with a message explaining the why.
+
+See [`docs/architecture.md`](docs/architecture.md) for how the pieces fit.
+
+By contributing you agree your work is licensed under MIT OR Apache-2.0.
