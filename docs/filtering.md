@@ -16,10 +16,15 @@ exclude = ["**/.cache", "*.tmp", "node_modules/", "/home/alice/Downloads"]
 | `/home/alice/Downloads` | that one path |
 | `/home/*/tmp` | `tmp` in each directory under `/home` |
 
-A pattern that starts with `/` is a path as it is recorded in the backup, so it
-includes the mount point. It applies to the subvolume that contains it. Glob
-characters work after the mount point but not inside it: `/ho*/alice` matches
-nothing. Patterns that do not start with `/` match at any depth.
+A pattern that starts with `/` is a full path, written the way the file appears on
+your running system, such as `/home/alice/Downloads`. rbtrfs works out which
+subvolume it belongs to from the mount point at the start of the path. You do not
+need to know where the snapshots are kept.
+
+The mount point part has to be written out. Wildcards work after it, as in
+`/home/*/tmp`, but not inside it: `/ho*/alice` matches nothing.
+
+A pattern that does not start with `/` matches at any depth, in every subvolume.
 
 A trailing `/` limits a pattern to directories.
 
