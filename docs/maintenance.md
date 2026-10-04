@@ -6,7 +6,7 @@ Each run leaves read-only snapshots on the btrfs filesystem. `backup` deletes ol
 ones per `keep_local` / `keep_local_days`. `rbtrfs gc` does the same on demand and
 also reclaims snapshots orphaned by a crashed or killed run (they are real
 subvolumes and survive the process). `--all-keys` also sweeps subvolumes the
-profile no longer selects. Incremental backups do **not** depend on local
+profile no longer selects. Incremental backups do not depend on local
 snapshots: the previous run is found through the repository.
 
 ## Repository retention
@@ -33,8 +33,8 @@ running `rbtrfs backup` (each row was tested):
 | `rbtrfs forget`/`gc`/`backup` on the same machine | yes: refused by the run lock |
 | rustic forget/prune with default options | yes: two-phase pruning marks unneeded packs and deletes them only after 23 h, recovering any that turn out to be used. Also held with the delay set to 0 |
 | `restic backup`, readers (`restore`, `ls`, `check`) | yes |
-| **`restic prune` / `restic forget --prune`** | **no.** restic relies on locks rbtrfs cannot take; reproduced a repository with a missing pack while the backup exited 0 |
-| **`--instant-delete`** (any tool) | **no.** Reproduced a backup crashing inside rustic_core |
+| `restic prune` / `restic forget --prune` | no. restic relies on locks rbtrfs cannot take; reproduced a repository with a missing pack while the backup exited 0 |
+| `--instant-delete` (any tool) | no. Reproduced a backup crashing inside rustic_core |
 
 So prune with `rbtrfs forget --prune` (or rustic), and run restic's own prune only
 when no backup can be running. Delayed-deletion state is accepted by

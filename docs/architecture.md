@@ -13,42 +13,54 @@ select subvolumes -> stage (top-level subvolume, private mount ns)
 
 ## Key decisions
 
-**rustic_core, in-process.** `BackupOptions::as_path` reads from the staging
-snapshot but records the original mount point, which the restic CLI cannot do. It
-makes paths stable across runs (so unchanged files are never re-read) without FUSE
-or bind mounts. The repository stays plain restic; the test suite checks it with
-the official `restic check --read-data`.
+### rustic_core, in-process
 
-**Private mount namespace.** The top-level subvolume (`subvolid=5`), where
-snapshots are staged, is rarely mounted. rbtrfs `unshare(CLONE_NEWNS)`s and makes
-`/` private, then mounts it there: invisible to the host, cleaned up by the kernel
-even on SIGKILL. `unshare` must run first, while the process is single-threaded,
-because it applies per thread and rustic_core starts a thread pool. A
-`staging = "in-subvolume"` fallback needs no mount.
+`BackupOptions::as_path` reads from the staging snapshot but records the original
+mount point, which the restic CLI cannot do. It makes paths stable across runs (so
+unchanged files are never re-read) without FUSE or bind mounts. The repository stays
+plain restic; the test suite checks it with the official `restic check --read-data`.
 
-**One snapshot per subvolume, then merge.** `as_path` takes a single path per
-backup, so each subvolume is backed up separately and `merge_snapshots` joins them
-into one snapshot with each subvolume at its real path. The parts stay in the
-repository (tagged `rbtrfs:part`, labelled `rbtrfs-part:<key>`) because they are
-what the next run uses as its parent. Merged and part snapshots are stamped with
-the burst time. The repository must be **re-opened** between the part backups and
-the merge, otherwise the in-memory index misses the newly written trees.
+### Private mount namespace
 
-**Consistency.** btrfs has no atomic multi-subvolume snapshot (and `FIFREEZE`
-would deadlock the transaction). rbtrfs does all the snapshots back-to-back with
-every path and option prepared beforehand (about 2 ms per subvolume), wrapped in
-hooks that always run and defer termination signals.
+The top-level subvolume (`subvolid=5`), where snapshots are staged, is rarely
+mounted. rbtrfs `unshare(CLONE_NEWNS)`s and makes `/` private, then mounts it there:
+invisible to the host, cleaned up by the kernel even on SIGKILL. `unshare` must run
+first, while the process is single-threaded, because it applies per thread and
+rustic_core starts a thread pool. A `staging = "in-subvolume"` fallback needs no
+mount.
 
-**btrfs behind a trait.** `BtrfsOps` (`libbtrfsutil` today) keeps FFI out of the
-rest of the code and lets the burst and GC be unit-tested against a fake.
+### One snapshot per subvolume, then merge
 
-**Generic discovery.** Mounts come from `/proc/self/mountinfo`, grouped per
-filesystem; nothing assumes an `@`/`@home` naming scheme. Subvolume keys are
-derived from the mount point with `-` and `%` escaped so they never collide.
+`as_path` takes a single path per backup, so each subvolume is backed up separately
+and `merge_snapshots` joins them into one snapshot with each subvolume at its real
+path. The parts stay in the repository (tagged `rbtrfs:part`, labelled
+`rbtrfs-part:<key>`) because they are what the next run uses as its parent. Merged
+and part snapshots are stamped with the burst time. The repository must be re-opened
+between the part backups and the merge, otherwise the in-memory index misses the
+newly written trees.
 
-**Snapshots outlive the process.** Snapshots are on-disk subvolumes, not
-namespace-scoped: a killed run leaks them (the mount vanishes, they do not). `gc`
-is therefore required, not optional.
+### Consistency
+
+btrfs has no atomic multi-subvolume snapshot (and `FIFREEZE` would deadlock the
+transaction). rbtrfs does all the snapshots back-to-back with every path and option
+prepared beforehand (about 2 ms per subvolume), wrapped in hooks that always run and
+defer termination signals.
+
+### btrfs behind a trait
+
+`BtrfsOps` (`libbtrfsutil` today) keeps FFI out of the rest of the code and lets the
+burst and GC be unit-tested against a fake.
+
+### Generic discovery
+
+Mounts come from `/proc/self/mountinfo`, grouped per filesystem; nothing assumes an
+`@`/`@home` naming scheme. Subvolume keys are derived from the mount point with `-`
+and `%` escaped so they never collide.
+
+### Snapshots outlive the process
+
+Snapshots are on-disk subvolumes, not namespace-scoped: a killed run leaks them (the
+mount vanishes, they do not). `gc` is therefore needed to clean up.
 
 ## Code map
 

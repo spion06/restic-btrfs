@@ -43,7 +43,7 @@ keep_daily = 7
 
 ## Subvolumes
 
-Subvolumes are chosen by **mount point** (`rbtrfs discover` lists them).
+Subvolumes are chosen by mount point (`rbtrfs discover` lists them).
 
 - Only whole-subvolume mounts are snapshotted. A bind mount of a subdirectory is
   skipped with a warning; a subvolume mounted twice is recorded once.
@@ -68,7 +68,7 @@ Shell commands run before (`pre`) and after (`post`) the snapshot burst, inside
 rbtrfs' private mount namespace: they see the host's mounts, but mounts they make
 are not visible outside.
 
-`post` hooks **always** run once the window opened, even if a `pre` hook or the
+`post` hooks always run once the window opened, even if a `pre` hook or the
 snapshot failed, and SIGINT/SIGTERM/SIGHUP are held until they finish, so a
 quiesced service is thawed on failure or Ctrl-C (SIGKILL excepted). With
 `on_failure = "warn"` a failing hook is reported but the run continues.
@@ -94,7 +94,7 @@ that share subvolumes need different `staging_name`s.
 
 `repository` is a local path (the only kind covered by the tests), `rest:https://…`,
 or `rclone:remote:path` (needs `rclone`); the last two are accepted but untested
-here. restic-style `sftp:` and `s3:` URLs are **not** supported; reach those with
+here. restic-style `sftp:` and `s3:` URLs are not supported; reach those with
 `rclone:`.
 
 ### Repository on NFS or another share
@@ -115,6 +115,6 @@ target  = "/run/rbtrfs/repo"                    # optional (default)
 rbtrfs runs `mount -t <type> [-o <options>] <source> <target>` inside its private
 namespace before opening the repository, so `mount.nfs` and friends resolve
 hostnames and options as usual. The mount never reaches the host's mount table and
-disappears with the process. Because it needs the namespace, **every command that
-opens the repository then needs root**. A local filesystem stands in for the export
+disappears with the process. Because it needs the namespace, every command that
+opens the repository then needs root. A local filesystem stands in for the export
 in the tests; a real NFS server is not covered.
