@@ -1,6 +1,6 @@
 # Architecture
 
-How rbtrfs works and why. For usage see the [README](../README.md).
+How rbtrfs works and why. For usage see the [README](https://github.com/spion06/restic-btrfs/blob/main/README.md).
 
 ## Flow of a backup
 

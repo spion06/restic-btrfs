@@ -167,6 +167,19 @@ mod tests {
     }
 
     #[test]
+    fn the_docs_site_navigation_lists_every_command_page() {
+        let summary =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/SUMMARY.md"))
+                .expect("docs/SUMMARY.md");
+        for (name, _) in render_all() {
+            assert!(
+                summary.contains(&format!("commands/{name}")),
+                "docs/SUMMARY.md is missing commands/{name}; add it so it appears on the docs site"
+            );
+        }
+    }
+
+    #[test]
     fn pages_cover_every_visible_command_and_flag() {
         let pages = render_all();
         let backup = &pages

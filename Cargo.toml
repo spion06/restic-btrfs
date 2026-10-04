@@ -6,6 +6,7 @@ rust-version = "1.91"
 description = "Consistent multi-subvolume btrfs snapshot backups into a restic-format repository"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/spion06/restic-btrfs"
+homepage = "https://spion06.github.io/restic-btrfs/"
 readme = "README.md"
 keywords = ["btrfs", "backup", "restic", "snapshot"]
 categories = ["command-line-utilities", "filesystem"]

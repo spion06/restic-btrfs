@@ -3,7 +3,7 @@
 [![CI](https://github.com/spion06/restic-btrfs/actions/workflows/ci.yml/badge.svg)](https://github.com/spion06/restic-btrfs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue)](#license)
 
-[Install](docs/install.md) · [Usage](docs/usage.md) · [Documentation](docs/README.md) · [Releases](https://github.com/spion06/restic-btrfs/releases)
+[Install](docs/install.md) · [Usage](docs/usage.md) · [Documentation](https://spion06.github.io/restic-btrfs/) · [Releases](https://github.com/spion06/restic-btrfs/releases)
 
 rbtrfs *("restic for btrfs snapshots")* is a command-line program that backs up btrfs
 subvolumes together into a restic repository, with each subvolume stored under its
@@ -54,6 +54,7 @@ exclude       = ["**/.cache", "*.tmp"]
 
 ## Installation and documentation
 
+- [Documentation site](https://spion06.github.io/restic-btrfs/)
 - [Install](docs/install.md)
 - [Usage](docs/usage.md): configure, back up, restore, schedule, exit codes
 - [Config file format](docs/config-file.md)

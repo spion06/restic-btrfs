@@ -28,6 +28,10 @@ help text, regenerate it, or the test suite fails:
 
     cargo run -- gendocs docs/commands
 
+The docs are also published as a site, built with [mdBook](https://rust-lang.github.io/mdBook/)
+from `docs/` (`book.toml`, `docs/SUMMARY.md`). To preview it, install mdBook and run
+`mdbook serve`. Add a new page to `docs/SUMMARY.md` or it will not appear on the site.
+
 ## Guidelines
 
 - Keep btrfs calls behind `BtrfsOps`, and keep the namespace `unshare` first in `main`.

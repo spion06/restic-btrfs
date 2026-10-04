@@ -2,7 +2,7 @@
 
 This page describes each setting. For how the file is laid out (profiles,
 sub-tables, value types, error messages) see [Config file format](config-file.md).
-[`examples/config.toml`](../examples/config.toml) has a complete example.
+[`examples/config.toml`](https://github.com/spion06/restic-btrfs/blob/main/examples/config.toml) has a complete example.
 
 ```toml
 [profile.default]

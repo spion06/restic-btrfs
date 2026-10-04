@@ -1,0 +1,16 @@
+[book]
+title = "rbtrfs"
+authors = ["spion06"]
+description = "Consistent btrfs snapshot backups into a restic repository"
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/spion06/restic-btrfs"
+edit-url-template = "https://github.com/spion06/restic-btrfs/edit/main/docs/{path}"
+site-url = "/restic-btrfs/"
+default-theme = "light"
+preferred-dark-theme = "navy"

@@ -117,4 +117,4 @@ A backup that fails part-way leaves any local snapshots it already took. Run
 
 - `RBTRFS_CONFIG`: path of the config file, used when `--config` is not given.
 
-For the test suite, see [CONTRIBUTING](../CONTRIBUTING.md).
+For the test suite, see [CONTRIBUTING](https://github.com/spion06/restic-btrfs/blob/main/CONTRIBUTING.md).
