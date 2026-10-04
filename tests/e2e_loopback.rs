@@ -1510,7 +1510,7 @@ fn repository_can_live_on_a_privately_mounted_filesystem() {
     let target = fx.base().join("repo-mnt");
     let cfg = |source: &str| {
         format!(
-            "[profile.default]\nrepository = \"{t}/restic/box\"\npassword = \"pw\"\n\
+            "[profile.default]\nrepository = \"restic/box\"\npassword = \"pw\"\n\
              subvolumes = [\"{a}\"]\n\
              [profile.default.repository_mount]\ntype = \"btrfs\"\nsource = \"{source}\"\n\
              target = \"{t}\"\n",

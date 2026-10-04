@@ -89,7 +89,7 @@ host, rbtrfs can mount it for the run:
 
 ```toml
 [profile.default]
-repository = "/run/rbtrfs/repo/restic/mybox"   # a path below the mount target
+repository = "restic/mybox"                     # relative to the mount target
 
 [profile.default.repository_mount]
 type    = "nfs"
@@ -100,8 +100,12 @@ target  = "/run/rbtrfs/repo"                    # optional, this is the default
 
 rbtrfs runs `mount -t <type> [-o <options>] <source> <target>` before it opens the
 repository, so `mount.nfs` and the other helpers resolve hostnames and options as
-usual. `type` can be anything `mount(8)` accepts, and `repository` must be a path
-below `target`.
+usual. `type` can be anything `mount(8)` accepts.
+
+`repository` is relative to `target`, so `"restic/mybox"` means
+`/run/rbtrfs/repo/restic/mybox`. Use `"."` for the root of the share. You can also
+write the full path, but it has to be below `target`, and a relative path cannot
+contain `..`. The directory is created on the first backup if it does not exist.
 
 The mount is private to the rbtrfs process: it never appears in the host's mount
 table and goes away when the process exits, even if it is killed.

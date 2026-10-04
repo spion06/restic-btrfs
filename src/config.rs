@@ -271,8 +271,12 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        let cfg: Config =
+        let mut cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
+        for (name, p) in cfg.profile.iter_mut() {
+            p.resolve_repository_path()
+                .with_context(|| format!("profile [{name}]"))?;
+        }
         for (name, p) in &cfg.profile {
             p.validate().with_context(|| format!("profile [{name}]"))?;
         }
@@ -319,6 +323,38 @@ fn warn_if_accessible(path: &Path, why: &str) {
 }
 
 impl Profile {
+    /// With `repository_mount`, a relative `repository` (`"tempest"`, or `"."` for the
+    /// mount itself) is taken relative to the mount target. A string that looks like
+    /// a backend URL (`rest:...`) is left alone and rejected later by `validate`.
+    pub fn resolve_repository_path(&mut self) -> Result<()> {
+        let Some(m) = &self.repository_mount else {
+            return Ok(());
+        };
+        let repo = Path::new(&self.repository);
+        let looks_like_url = self
+            .repository
+            .split('/')
+            .next()
+            .is_some_and(|first| first.contains(':'));
+        if repo.is_absolute() || looks_like_url {
+            return Ok(());
+        }
+        if repo
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            bail!("a relative `repository` must not contain `..` (it is relative to the mount target)");
+        }
+        let mut full = m.target.clone();
+        for c in repo.components() {
+            if let std::path::Component::Normal(part) = c {
+                full.push(part); // drops `.` components
+            }
+        }
+        self.repository = full.to_string_lossy().into_owned();
+        Ok(())
+    }
+
     /// Does any backend option look like a credential (key, secret, token, ...)?
     fn has_secret_backend_option(&self) -> bool {
         const HINTS: [&str; 5] = ["key", "secret", "token", "pass", "credential"];
@@ -495,6 +531,50 @@ mod tests {
         let p = cfg.profile("default").unwrap();
         assert!(p.validate().is_err());
         assert!(!p.has_secret_backend_option());
+    }
+
+    #[test]
+    fn relative_repository_is_taken_below_the_mount_target() {
+        let load = |repo: &str, target: &str| {
+            let mut cfg: Config = toml::from_str(&format!(
+                "[profile.default]\nrepository = \"{repo}\"\npassword = \"x\"\nsubvolumes = [\"/home\"]\n\
+                 [profile.default.repository_mount]\ntype = \"nfs\"\nsource = \"nas:/e\"\n{target}"
+            ))
+            .unwrap();
+            let p = cfg.profile.get_mut("default").unwrap();
+            p.resolve_repository_path()?;
+            p.validate()?;
+            Ok::<_, anyhow::Error>(p.repository.clone())
+        };
+        assert_eq!(load("tempest", "").unwrap(), "/run/rbtrfs/repo/tempest");
+        assert_eq!(load("a/b", "target = \"/mnt/x\"").unwrap(), "/mnt/x/a/b");
+        assert_eq!(load(".", "").unwrap(), "/run/rbtrfs/repo");
+        // absolute paths still have to be below the target, and `..` cannot escape it
+        assert_eq!(
+            load("/run/rbtrfs/repo/x", "").unwrap(),
+            "/run/rbtrfs/repo/x"
+        );
+        assert!(load("/elsewhere", "").is_err());
+        assert!(load("../escape", "").is_err());
+        assert!(load("rest:https://h/", "").is_err());
+    }
+
+    #[test]
+    fn load_resolves_a_relative_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("c.toml");
+        std::fs::write(
+            &file,
+            "[profile.default]\nrepository = \"restic/box\"\npassword_command = \"true\"\n\
+             subvolumes = [\"/home\"]\n[profile.default.repository_mount]\ntype = \"nfs\"\n\
+             source = \"nas:/e\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load(&file).unwrap();
+        assert_eq!(
+            cfg.profile("default").unwrap().repository,
+            "/run/rbtrfs/repo/restic/box"
+        );
     }
 
     #[test]
