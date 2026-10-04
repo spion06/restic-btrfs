@@ -45,12 +45,16 @@ snapshots are deleted according to `keep_local`.
     sudo rbtrfs restore latest --subvol /home --target /mnt/restore
 
 `latest` is the newest backup from this host. To restore onto a different
-machine, use `--host OLDNAME` or `--any-host`. Add `--as-subvolume` to restore
-into a new btrfs subvolume instead of a plain directory.
+machine, use `--host OLDNAME` or `--any-host`.
+
+`restore` writes plain files. Run it as root to get the original owners back. Add
+`--as-subvolume` to create the target as a new btrfs subvolume instead; the target
+must be on btrfs and must not exist yet. Subvolumes that were nested inside the one
+you restore come back as plain directories.
 
 ## Hooks
 
-Hooks quiesce things that write to the subvolumes. They run before and after the
+Hooks pause things that write to the subvolumes. They run before and after the
 snapshots are taken, not during the backup, so a database is only paused for a
 moment:
 

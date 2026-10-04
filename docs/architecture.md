@@ -5,18 +5,18 @@ How rbtrfs works and why. For usage see the [README](../README.md).
 ## Flow of a backup
 
 ```
-select subvolumes -> stage (top-level subvolume, private mount ns)
-  -> pre-hooks -> snapshot burst -> post-hooks
-  -> per-subvolume backup of the read-only snapshot (as_path = real mount point)
-  -> merge parts into one snapshot -> delete old local snapshots
+select subvolumes -> mount the top-level subvolume (private mount namespace)
+  -> pre hooks -> take all snapshots -> post hooks
+  -> back up each snapshot, recording the real mount point (as_path)
+  -> merge the results into one backup -> delete old local snapshots
 ```
 
 ## Key decisions
 
 ### rustic_core, in-process
 
-`BackupOptions::as_path` reads from the staging snapshot but records the original
-mount point, which the restic CLI cannot do. It makes paths stable across runs (so
+rustic_core can read from one path and record another (`BackupOptions::as_path`).
+The restic CLI cannot do this. It makes paths stable across runs (so
 unchanged files are never re-read) without FUSE or bind mounts. The repository stays
 plain restic; the test suite checks it with the official `restic check --read-data`.
 
@@ -31,25 +31,31 @@ mount.
 
 ### One snapshot per subvolume, then merge
 
-`as_path` takes a single path per backup, so each subvolume is backed up separately
-and `merge_snapshots` joins them into one snapshot with each subvolume at its real
-path. The parts stay in the repository (tagged `rbtrfs:part`, labelled
-`rbtrfs-part:<key>`) because they are what the next run uses as its parent. Merged
-and part snapshots are stamped with the burst time. The repository must be re-opened
-between the part backups and the merge, otherwise the in-memory index misses the
-newly written trees.
+`as_path` accepts only one path per backup. So each subvolume is backed up on its own,
+and `merge_snapshots` joins the results into one snapshot with every subvolume at its
+real path.
+
+The per-subvolume snapshots (the "parts", tagged `rbtrfs:part` and labelled
+`rbtrfs-part:<key>`) stay in the repository, because the next run uses them as its
+parent. Both kinds are stamped with the time the snapshots were taken.
+
+The repository has to be re-opened between the per-subvolume backups and the merge.
+Otherwise the in-memory index does not contain the trees that were just written, and
+the merge fails.
 
 ### Consistency
 
-btrfs has no atomic multi-subvolume snapshot (and `FIFREEZE` would deadlock the
-transaction). rbtrfs does all the snapshots back-to-back with every path and option
-prepared beforehand (about 2 ms per subvolume), wrapped in hooks that always run and
-defer termination signals.
+btrfs cannot snapshot several subvolumes atomically, and freezing the filesystem
+would deadlock the transaction that creates a snapshot. So rbtrfs takes all the
+snapshots back to back, with every path and option prepared beforehand and no other
+work in between. That is about 2 ms per subvolume. The hooks around it always run
+and hold termination signals until they finish.
 
 ### btrfs behind a trait
 
-`BtrfsOps` (`libbtrfsutil` today) keeps FFI out of the rest of the code and lets the
-burst and GC be unit-tested against a fake.
+The `BtrfsOps` trait, implemented with `libbtrfsutil`, keeps FFI out of the rest of
+the code. It also lets the snapshot loop and the local cleanup be unit-tested
+against a fake.
 
 ### Generic discovery
 
@@ -59,8 +65,9 @@ and `%` escaped so they never collide.
 
 ### Snapshots outlive the process
 
-Snapshots are on-disk subvolumes, not namespace-scoped: a killed run leaks them (the
-mount vanishes, they do not). `gc` is therefore needed to clean up.
+Snapshots are on-disk subvolumes, not part of the mount namespace. When a run is
+killed, the mount disappears but the snapshots stay, so `rbtrfs gc` is needed to
+remove them.
 
 ## Code map
 
@@ -70,14 +77,14 @@ mount vanishes, they do not). `gc` is therefore needed to clean up.
 | `config`, `excludes` | TOML profiles; user excludes to rustic globs |
 | `mountinfo`, `discover`, `select` | find btrfs mounts and match `subvolumes` |
 | `btrfs` | `BtrfsOps` trait and the libbtrfsutil implementation |
-| `ns`, `snapshot`, `gc` | namespace and mounts, staging, burst, local GC |
-| `hooks`, `signals`, `lock` | consistency window, signal deferral, run lock |
+| `ns`, `snapshot`, `gc` | namespace and mounts, staging, taking snapshots, local cleanup |
+| `hooks`, `signals`, `lock` | hooks, signal handling, the run lock |
 | `repo`, `backup`, `restore`, `forget` | repository access and the commands on it |
 
 ## Tests
 
-Unit tests cover parsing, selection, excludes (against the real matcher), the
-burst/GC against a fake backend and the forget planner. `tests/e2e_loopback.rs`
+Unit tests cover parsing, selection, excludes (against the real matcher), snapshot loop and local
+cleanup against a fake backend, and the forget planner. `tests/e2e_loopback.rs`
 builds real btrfs filesystems on loop devices; when not root each test re-runs in
 its own privileged container (testcontainers). It covers snapshot isolation,
 metadata fidelity, signals and SIGKILL, concurrent writers, retention and safety

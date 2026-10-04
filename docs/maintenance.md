@@ -2,48 +2,57 @@
 
 ## Local snapshots
 
-Each run leaves read-only snapshots on the btrfs filesystem. `backup` deletes old
-ones per `keep_local` / `keep_local_days`. `rbtrfs gc` does the same on demand and
-also reclaims snapshots orphaned by a crashed or killed run (they are real
-subvolumes and survive the process). `--all-keys` also sweeps subvolumes the
-profile no longer selects. Incremental backups do not depend on local
-snapshots: the previous run is found through the repository.
+Every run leaves read-only snapshots on the btrfs filesystem. A backup deletes the
+old ones according to `keep_local` and `keep_local_days`, so you do not normally need
+to do anything.
 
-## Repository retention
+If a run is killed, its snapshots stay behind. They are real btrfs subvolumes and
+they survive the process. Run `rbtrfs gc` to remove them. It applies the same
+settings as a backup, and `--keep-local` and `--keep-local-days` override them. Add
+`--all-keys` to also clean up subvolumes that the profile no longer selects.
 
-`rbtrfs forget` keeps merged snapshots per your `[retention]` policy and drops the
-internal per-subvolume *part* snapshots older than the newest run. Snapshots rbtrfs
-did not create are never touched. `--prune` also frees unreferenced data; by
-default rustic only marks it and deletes it on a later prune. `--dry-run` shows
-what would go.
+Incremental backups do not depend on local snapshots. rbtrfs finds the previous run
+through the repository.
 
-`--instant-delete` frees it immediately but skips that safety. It asks you to type
-`yes` on a terminal; elsewhere (cron, systemd) it refuses unless `--allow-unsafe`
-is given.
+## Retention
+
+`rbtrfs forget` thins the repository according to the profile's `retention` table.
+It works per host and only looks at backups that rbtrfs made, so your other restic
+snapshots are never touched. It also removes the per-subvolume snapshots that
+`rbtrfs snapshots --all` shows, except those from the newest run, which the next
+backup needs.
+
+`--dry-run` shows what would be removed. By default `forget` only removes snapshots.
+Add `--prune` to also delete the data nothing refers to any more. rustic does this in
+two steps: the first prune marks unneeded data and a later one deletes it, 23 hours
+afterwards.
+
+`--instant-delete` deletes it straight away. That skips the second step, and if
+anything else uses the repository at the same time, it can corrupt it. On a terminal
+rbtrfs asks you to type `yes`. Elsewhere, such as cron or systemd, it refuses unless
+you also pass `--allow-unsafe`.
 
 ## Concurrency
 
-One `backup`, `gc` or `forget` runs at a time per machine, enforced with a lock at
-`/run/rbtrfs/rbtrfs.lock`. rustic_core is lock-free by design and cannot write
-restic's repository lock, so other tools are not excluded. What is safe alongside a
-running `rbtrfs backup` (each row was tested):
+Only one `backup`, `gc` or `forget` runs at a time on a machine. A second one fails
+immediately. This is enforced with a lock on `/run/rbtrfs/rbtrfs.lock`.
 
-| other activity | safe? |
+restic protects a repository with lock files in the repository itself. rustic_core,
+which rbtrfs uses, does not write them, and rbtrfs cannot add them. So other tools
+that use the same repository are not stopped from running at the same time. What
+happens then depends on the tool. Each of these was tested while a backup was
+running:
+
+| Other activity | Safe? |
 |---|---|
-| `rbtrfs forget`/`gc`/`backup` on the same machine | yes: refused by the run lock |
-| rustic forget/prune with default options | yes: two-phase pruning marks unneeded packs and deletes them only after 23 h, recovering any that turn out to be used. Also held with the delay set to 0 |
-| `restic backup`, readers (`restore`, `ls`, `check`) | yes |
-| `restic prune` / `restic forget --prune` | no. restic relies on locks rbtrfs cannot take; reproduced a repository with a missing pack while the backup exited 0 |
-| `--instant-delete` (any tool) | no. Reproduced a backup crashing inside rustic_core |
+| rbtrfs `backup`, `gc` or `forget` on the same machine | Yes. The lock refuses it. |
+| rustic `forget` and `prune`, default options | Yes. Its two-step prune keeps data for 23 hours before deleting it, and recovers anything that turns out to be needed. This also held with the delay set to 0. |
+| `restic backup`, and anything that only reads (`restore`, `ls`, `check`) | Yes. |
+| `restic prune` or `restic forget --prune` | No. restic assumes nobody else is writing unless it sees a lock. In one run `restic check` afterwards reported a missing pack, although the backup had exited successfully. |
+| `--instant-delete`, from any tool | No. In one run it crashed a backup. |
 
-So prune with `rbtrfs forget --prune` (or rustic), and run restic's own prune only
-when no backup can be running. Delayed-deletion state is accepted by
-`restic check --read-data`.
+NB: do not run `restic prune` against a repository that rbtrfs backs up to unless
+you are sure no backup is running. Use `rbtrfs forget --prune` or rustic instead.
 
-## Restoring
-
-`restore` writes plain files; run it as root to keep ownership. `--as-subvolume`
-creates the target as a new btrfs subvolume instead (root; the target must be on
-btrfs and not exist). Subvolumes that were nested in the original come back as
-plain directories. `latest` is the newest merged snapshot from *this host*; use
-`--host NAME` or `--any-host` when restoring onto a rebuilt machine.
+The state that rustic's two-step prune leaves behind is valid to restic:
+`restic check --read-data` accepts it.

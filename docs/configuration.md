@@ -1,10 +1,9 @@
 # Configuration
 
-A TOML file with one or more named profiles. Default path `/etc/rbtrfs/config.toml`;
-override with `--config FILE` or `$RBTRFS_CONFIG`. Pick a profile with
-`--profile NAME` (default `default`). Keep the file mode `0600` if it holds a
-password (rbtrfs warns otherwise). A complete example is in
-[`examples/config.toml`](../examples/config.toml).
+rbtrfs reads a TOML file with one or more named profiles. The default path is
+`/etc/rbtrfs/config.toml`. Use `--config FILE` or `$RBTRFS_CONFIG` to read a
+different file, and `--profile NAME` to pick a profile other than `default`.
+[`examples/config.toml`](../examples/config.toml) has a complete example.
 
 ```toml
 [profile.default]
@@ -19,62 +18,80 @@ pre  = ["systemctl stop mydb"]
 post = ["systemctl start mydb"]
 
 [profile.default.retention]
-keep_last = 3
+keep_last  = 3
 keep_daily = 7
 ```
 
+NB: if the file holds a password, make it readable by root only. rbtrfs warns if it
+is readable by anyone else.
+
 ## Keys
 
-| key | default | meaning |
+| Key | Default | Description |
 |---|---|---|
-| `repository` | required | where the restic repository lives; see [Repository](repository.md) |
-| `password` / `password_file` / `password_command` | one required | the repository password (exactly one of the three) |
-| `subvolumes` | required | mount points to back up; exact paths or globs |
-| `exclude` | `[]` | patterns to leave out; see [Filtering](filtering.md) |
-| `tags` | `["rbtrfs"]` | tags on the merged snapshot |
-| `keep_local` | `1` | newest N local snapshot sets kept per subvolume |
-| `keep_local_days` | unset | also keep local sets younger than this many days |
-| `staging` | `"top-level"` | `"top-level"` or `"in-subvolume"`; see [Staging](#staging) |
-| `staging_name` | `".rbtrfs-snapshots"` | name of the staging directory |
-| `hooks.pre` / `hooks.post` | `[]` | shell commands around the snapshot burst |
-| `hooks.on_failure` | `"abort"` | `"abort"` or `"warn"` when a hook fails |
-| `retention.*` | unset | policy for `rbtrfs forget`; see [Retention](#retention) |
-| `repository_mount.*` | unset | mount a share privately for the run; see [Repository](repository.md) |
+| `repository` | required | Where the restic repository lives. See [Repository](repository.md). |
+| `password`, `password_file`, `password_command` | one required | The repository password. Set exactly one. |
+| `subvolumes` | required | Mount points to back up. Exact paths or globs. |
+| `exclude` | `[]` | Patterns to leave out. See [Filtering](filtering.md). |
+| `tags` | `["rbtrfs"]` | Tags to put on each backup. |
+| `keep_local` | `1` | How many of the newest local snapshots to keep for each subvolume. |
+| `keep_local_days` | unset | Also keep local snapshots younger than this many days. |
+| `staging` | `"top-level"` | Where local snapshots are kept: `"top-level"` or `"in-subvolume"`. |
+| `staging_name` | `".rbtrfs-snapshots"` | Name of the directory that holds them. |
+| `hooks.pre`, `hooks.post` | `[]` | Shell commands to run before and after the snapshots are taken. |
+| `hooks.on_failure` | `"abort"` | What to do when a hook fails: `"abort"` or `"warn"`. |
+| `retention.*` | unset | The policy used by `rbtrfs forget`. |
+| `repository_mount.*` | unset | Mount a share for the run. See [Repository](repository.md). |
 
 ## Subvolumes
 
-Subvolumes are chosen by mount point (`rbtrfs discover` lists them).
+`subvolumes` lists mount points, not btrfs subvolume names. Run `rbtrfs discover` to
+see what is mounted. Globs such as `"/home/*"` are allowed.
 
-- Only whole-subvolume mounts are snapshotted. A bind mount of a subdirectory is
-  skipped with a warning; a subvolume mounted twice is recorded once.
-- btrfs snapshots are not recursive: a subvolume nested inside a selected one
-  appears as an empty directory. rbtrfs warns about nested subvolumes (mounted or
-  not) you did not select; read-only ones (snapper snapshots) are ignored.
+rbtrfs only snapshots mounts of a whole subvolume. If a path is a bind mount of a
+subdirectory, rbtrfs skips it and prints a warning. If the same subvolume is mounted
+in two places, it is backed up once, under the first mount point.
+
+btrfs snapshots are not recursive. If a subvolume is nested inside one you selected,
+it shows up as an empty directory in the backup unless you select it too. rbtrfs
+warns about every such subvolume, mounted or not. Read-only ones, such as snapper
+snapshots, are ignored.
 
 ## Hooks
 
-Shell commands run before (`pre`) and after (`post`) the snapshot burst, inside
-rbtrfs' private mount namespace: they see the host's mounts, but mounts they make
-are not visible outside.
+`hooks.pre` runs before the snapshots are taken and `hooks.post` runs after. Each
+entry is passed to `sh -c`. Use them to pause something that writes to the
+subvolumes, as in the example above. The backup itself runs after `post`, so the
+pause only lasts as long as it takes to take the snapshots.
 
-`post` hooks always run once the window opened, even if a `pre` hook or the
-snapshot failed, and SIGINT/SIGTERM/SIGHUP are held until they finish, so a
-quiesced service is thawed on failure or Ctrl-C (SIGKILL excepted). With
-`on_failure = "warn"` a failing hook is reported but the run continues.
+Hooks run inside the private mount namespace rbtrfs uses. They see the same mounts
+as the host, but anything they mount is not visible outside.
+
+`post` hooks always run, even if a `pre` hook or the snapshot failed. SIGINT,
+SIGTERM and SIGHUP are held until they finish. This means a paused service is
+resumed on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
+
+With `on_failure = "abort"` a failing hook stops the run. With `"warn"` rbtrfs prints
+the error and carries on.
 
 ## Retention
 
-`rbtrfs forget` applies `[profile.x.retention]` to the merged snapshots, per host:
-`keep_last`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly`,
-`keep_yearly`, and `keep_within` (a duration such as `"14d"`). Without a
-`[retention]` table it does nothing. See [Maintenance](maintenance.md).
+`retention` is the policy `rbtrfs forget` applies to the repository. The keys are
+`keep_last`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` and
+`keep_yearly`, which take a number, and `keep_within`, which takes a duration such
+as `"14d"`. They have the same meaning as in restic. Without a `retention` table,
+`forget` does nothing. See [Maintenance](maintenance.md#retention).
 
 ## Staging
 
-`top-level` (default): snapshots go under the top-level subvolume
-(`<subvolid=5>/.rbtrfs-snapshots/`), which rbtrfs mounts inside its private
-namespace.
+rbtrfs keeps each run's read-only snapshots until `keep_local` removes them. The
+`staging` key decides where.
 
-`in-subvolume`: snapshots go to `<mountpoint>/.rbtrfs-snapshots/` and are excluded
-from the backup. Use it where the top-level subvolume can't be mounted. Profiles
-that share subvolumes need different `staging_name`s.
+`"top-level"` is the default. Snapshots go under the filesystem's top-level
+subvolume, in `.rbtrfs-snapshots`. That subvolume is usually not mounted, so rbtrfs
+mounts it inside its private mount namespace for the run.
+
+`"in-subvolume"` puts the snapshots in `<mountpoint>/.rbtrfs-snapshots` instead and
+leaves that directory out of the backup. Use it if the top-level subvolume cannot be
+mounted. Profiles that back up the same subvolumes need different `staging_name`
+values.
