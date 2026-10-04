@@ -7,6 +7,7 @@ pub mod btrfs;
 pub mod cli;
 pub mod config;
 pub mod discover;
+pub mod dryrun;
 pub mod excludes;
 pub mod extra;
 pub mod forget;

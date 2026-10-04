@@ -41,7 +41,9 @@ pub fn translate(
         if p.starts_with('/') {
             let dir_only = p.len() > 1 && p.ends_with('/');
             if let Ok(rel) = Path::new(p).strip_prefix(record_path) {
-                let mut g = format!("!{}", escape(&snapshot_root.to_string_lossy()));
+                // a read root of "/" must not produce "//path"
+                let root = snapshot_root.to_string_lossy();
+                let mut g = format!("!{}", escape(root.trim_end_matches('/')));
                 let rel = rel.to_string_lossy();
                 if !rel.is_empty() {
                     g.push('/');
@@ -150,6 +152,19 @@ mod tests {
         )
         .unwrap();
         assert!(excluded(root, &format!("{ROOT}/home/alice"), true));
+    }
+
+    #[test]
+    fn a_read_root_of_slash_does_not_double_the_slash() {
+        let g = translate(
+            &pats(&["/var/lib/containerd"]),
+            Path::new("/"),
+            Path::new("/"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(g, ["!/var/lib/containerd"]);
+        assert!(excluded(g, "/var/lib/containerd", true));
     }
 
     #[test]

@@ -27,7 +27,7 @@ pub struct RunOutcome {
     pub gc_deleted: usize,
 }
 
-pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
+pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutcome> {
     let run_id = runid::now();
     let filesystems = discover::discover()?;
     let resolution = select::resolve(
@@ -56,7 +56,7 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     }
 
     if dry_run {
-        return dry_run_report(profile, &resolution, &extras.paths, run_id);
+        return dry_run_report(profile, &resolution, &extras.paths, run_id, scan_files);
     }
 
     let _lock = lock::acquire()?;
@@ -245,6 +245,7 @@ fn dry_run_report(
     resolution: &select::Resolution<'_>,
     extras: &[crate::extra::ExtraPath],
     run_id: String,
+    scan_files: bool,
 ) -> Result<RunOutcome> {
     let selections = &resolution.selections;
     let total: usize = selections.iter().map(|s| s.selected.len()).sum();
@@ -269,6 +270,9 @@ fn dry_run_report(
     }
     for mp in &resolution.excluded {
         println!("  skipping {} (exclude_subvolumes)", mp.display());
+    }
+    if scan_files {
+        report_file_selection(profile, resolution, extras);
     }
     // Validate what a real run would need, without writing anything.
     let handle =
@@ -340,4 +344,62 @@ fn warn_nested(sel: &FilesystemSelection<'_>, profile: &Profile, btrfs: &dyn Btr
 
 fn newest_wins(a: &Node, b: &Node) -> Ordering {
     a.meta.mtime.cmp(&b.meta.mtime)
+}
+
+/// Walk every selected path with the real exclude matcher and report what would be
+/// stored and what would be skipped. Metadata only; reads no file contents.
+fn report_file_selection(
+    profile: &Profile,
+    resolution: &select::Resolution<'_>,
+    extras: &[crate::extra::ExtraPath],
+) {
+    use crate::dryrun::{human, scan};
+
+    let mut roots: Vec<std::path::PathBuf> = resolution
+        .selections
+        .iter()
+        .flat_map(|s| s.selected.iter().map(|s| s.mount_point.clone()))
+        .collect();
+    roots.extend(extras.iter().map(|e| e.path.clone()));
+
+    println!();
+    for root in roots {
+        let staging = (profile.staging == crate::config::Staging::InSubvolume)
+            .then(|| root.join(&profile.staging_name));
+        let extra: Vec<&Path> = staging.iter().map(|p| p.as_path()).collect();
+        let globs = match excludes::translate(&profile.exclude, &root, &root, &extra) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("rbtrfs: warning: {}: {e:#}", root.display());
+                continue;
+            }
+        };
+        let s = match scan(&root, globs) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("rbtrfs: warning: could not scan {}: {e:#}", root.display());
+                continue;
+            }
+        };
+        println!(
+            "{}: would store {} files ({}); excluded {} path(s) ({})",
+            root.display(),
+            s.files,
+            human(s.bytes),
+            s.excluded.len(),
+            human(s.excluded_bytes())
+        );
+        for e in s.excluded.iter().take(15) {
+            println!("    {:>9}  {}", human(e.bytes), e.path.display());
+        }
+        if s.excluded.len() > 15 {
+            println!("    ... and {} more", s.excluded.len() - 15);
+        }
+        if s.unreadable > 0 {
+            println!(
+                "    note: {} directories could not be read; run as root to include them",
+                s.unreadable
+            );
+        }
+    }
 }

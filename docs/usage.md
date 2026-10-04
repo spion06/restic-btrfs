@@ -26,9 +26,14 @@ it is not.
 
 ## Back up
 
-Check the plan first. This needs no root:
+Check the plan first. This needs no root, though root sees every directory:
 
     rbtrfs backup --dry-run
+
+It prints the subvolumes it would snapshot and, for each, how many files and bytes
+would be stored and which paths your `exclude` patterns skip
+([details](filtering.md#checking-what-your-patterns-do)). Add `--no-scan` for just
+the plan.
 
 Then run it as root. The first run creates the repository.
 

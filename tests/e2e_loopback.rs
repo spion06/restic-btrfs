@@ -580,6 +580,17 @@ fn excludes_exclude() {
             a.display()
         ),
     );
+    // the dry run reports what the patterns skip, using the same matcher
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    assert!(plan.contains("would store 4 files"), "{plan}");
+    assert!(plan.contains(&format!("{}/.cache", a.display())), "{plan}");
+    assert!(
+        plan.contains(&format!("{}/Downloads", a.display())),
+        "{plan}"
+    );
+    assert!(!fx
+        .ok(&["backup", "--dry-run", "--no-scan"])
+        .contains("would store"));
     fx.ok(&["backup"]);
 
     let restored = files(&fx.restore("latest", a, "restored"));

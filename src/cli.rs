@@ -77,9 +77,14 @@ pub enum Command {
         #[arg(long, default_value = "default")]
         profile: String,
         /// Print the plan and check the repository and password, but change nothing.
-        /// Does not need root.
+        /// It also walks the selected paths with the real exclude patterns and reports
+        /// how much would be stored and which paths are skipped. Does not need root,
+        /// but run it as root to see everything.
         #[arg(long)]
         dry_run: bool,
+        /// With `--dry-run`, skip the walk over the files and only print the plan.
+        #[arg(long, requires = "dry_run")]
+        no_scan: bool,
     },
     /// List the backups in the repository.
     Snapshots {
@@ -288,9 +293,11 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             clap_mangen::Man::new(<Cli as clap::CommandFactory>::command()).render(&mut buf)?;
             write_stdout(&buf)
         }
-        Command::Backup { dry_run, .. } => {
+        Command::Backup {
+            dry_run, no_scan, ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
-            let outcome = backup::run(&p, *dry_run).context("backup run")?;
+            let outcome = backup::run(&p, *dry_run, !*no_scan).context("backup run")?;
             if !*dry_run {
                 println!(
                     "done: run {} — {} part(s), merged {}, {} local snapshot(s) gc'd",

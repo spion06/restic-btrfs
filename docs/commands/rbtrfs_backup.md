@@ -22,7 +22,11 @@ Default: `default`
 
 ### `--dry-run`
 
-Print the plan and check the repository and password, but change nothing. Does not need root.
+Print the plan and check the repository and password, but change nothing. It also walks the selected paths with the real exclude patterns and reports how much would be stored and which paths are skipped. Does not need root, but run it as root to see everything.
+
+### `--no-scan`
+
+With `--dry-run`, skip the walk over the files and only print the plan.
 
 ### `-c, --config <CONFIG>`
 
