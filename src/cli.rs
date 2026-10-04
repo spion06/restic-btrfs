@@ -79,8 +79,9 @@ pub enum Command {
         profile: String,
         /// Print the plan and check the repository and password, but change nothing.
         /// It also walks the selected paths with the real exclude patterns and reports
-        /// how much would be stored and which paths are skipped. Does not need root,
-        /// but run it as root to see everything.
+        /// how much would be stored and which paths are skipped. Needs root only if
+        /// you cannot read the config file or the repository (or the profile mounts
+        /// the repository); run it as root to see every directory.
         #[arg(long)]
         dry_run: bool,
         /// With `--dry-run`, skip the walk over the files and only print the plan.

@@ -26,7 +26,8 @@ it is not.
 
 ## Back up
 
-Check the plan first. This needs no root, though root sees every directory:
+Check the plan first. This works without root if you can read the config file and
+the repository, though root sees every directory:
 
     rbtrfs backup --dry-run
 
@@ -72,7 +73,8 @@ post = ["/usr/local/bin/after-snapshot"]
 The backup itself runs after the `post` hooks, from the snapshots.
 
 `post` hooks always run, even if a `pre` hook or the snapshot failed, and
-SIGINT, SIGTERM and SIGHUP are held until they finish.
+SIGINT, SIGTERM and SIGHUP sent to rbtrfs are held until they finish. See
+[Hooks](configuration.md#hooks) for what that covers.
 
 ## Schedule
 
@@ -90,6 +92,13 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/bin/rbtrfs backup
 ExecStart=/usr/local/bin/rbtrfs forget --prune
+# A oneshot service has no start timeout by default, so a backup that hangs (an NFS
+# share that went away, for instance) would hang for ever. Pick a limit that fits
+# a full first backup.
+TimeoutStartSec=2h
+# On stop, signal only rbtrfs. It finishes the post hooks before it exits; the default
+# would send SIGTERM to the hooks as well.
+KillMode=mixed
 # keep it out of the way of other programs (see Priority in the configuration page)
 Nice=10
 CPUWeight=20
@@ -142,6 +151,7 @@ ExecStart=/usr/bin/true
 # "-": a failed final backup must not make the shutdown fail
 ExecStop=-/usr/local/bin/rbtrfs backup
 TimeoutStopSec=5min
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
@@ -159,8 +169,10 @@ shutdown has not been tested. A shutdown does not wait longer than `TimeoutStopS
 - `1`: the command failed
 - `2`: bad command line
 
-A backup that fails part-way leaves any local snapshots it already took. Run
-`rbtrfs gc` to remove them.
+A backup that fails removes the local snapshots it took. A backup that is killed
+(SIGKILL, power loss) cannot, so its snapshots stay. They count as an ordinary set, and
+later backups remove them once newer runs push them out of `keep_local`.
+`rbtrfs gc --keep-local 0` removes them straight away.
 
 ## Environment variables
 

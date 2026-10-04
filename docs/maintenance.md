@@ -6,10 +6,15 @@ Every run leaves read-only snapshots on the btrfs filesystem. A backup deletes t
 old ones according to `keep_local` and `keep_local_days`, so you do not normally need
 to do anything.
 
-If a run is killed, its snapshots stay behind. They are real btrfs subvolumes and
-they survive the process. Run `rbtrfs gc` to remove them. It applies the same
-settings as a backup, and `--keep-local` and `--keep-local-days` override them. Add
-`--all-keys` to also clean up subvolumes that the profile no longer selects.
+A run that fails removes the snapshots it took. A run that is killed cannot, and its
+snapshots stay behind: they are real btrfs subvolumes and they survive the process.
+They count as an ordinary set, so later backups remove them once newer runs push them
+out of `keep_local`.
+
+`rbtrfs gc` does the same cleanup on demand. It applies the same settings as a backup,
+and `--keep-local` and `--keep-local-days` override them, so `rbtrfs gc --keep-local 0`
+removes everything. Add `--all-keys` to also clean up subvolumes that the profile no
+longer selects.
 
 Incremental backups do not depend on local snapshots. rbtrfs finds the previous run
 through the repository.
@@ -18,7 +23,9 @@ through the repository.
 
 `rbtrfs forget` thins the repository according to the profile's `retention` table.
 It works per host and only looks at backups that rbtrfs made, so your other restic
-snapshots are never touched. It also removes the per-subvolume snapshots that
+snapshots are never touched. Profiles are not told apart: if several profiles back up
+to one repository from the same host, `forget` applies one policy to all their
+backups together. Give each profile its own repository. It also removes the per-subvolume snapshots that
 `rbtrfs snapshots --all` shows, except those from the newest run (or later), which
 the next backup needs.
 

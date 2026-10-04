@@ -56,6 +56,8 @@ keep_daily = 7
 
 `subvolumes` says what to back up. It lists mount points, not btrfs subvolume names.
 Run `rbtrfs discover` to see what is mounted. Globs such as `"/home/*"` are allowed.
+`*` matches within one directory level, so `"/home/*"` does not select `/home/a/b`;
+`**` matches across levels.
 
 ```toml
 subvolumes = ["/", "/home", "/srv"]
@@ -196,6 +198,9 @@ point. An extra path is stored under its real path, so `rbtrfs restore --subvol 
 and `rbtrfs ls` work like they do for subvolumes. It is also incremental, and the
 `exclude` patterns apply to it.
 
+An extra path stays on its own filesystem: other filesystems mounted inside it are
+not followed, the same as for subvolumes. Add them as separate extra paths.
+
 Extra paths are not snapshots. rbtrfs reads them live, after the snapshots are
 taken and after the `post` hooks have run. A file that changes while it is being
 read can end up inconsistent, and hooks cannot help, because they have finished by then.
@@ -222,8 +227,14 @@ Hooks run inside the private mount namespace rbtrfs uses. They see the same moun
 as the host, but anything they mount is not visible outside.
 
 `post` hooks always run, even if a `pre` hook or the snapshot failed. SIGINT,
-SIGTERM and SIGHUP are held until they finish, so a `post` hook can always undo
-what a `pre` hook did, even on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
+SIGTERM and SIGHUP sent to rbtrfs are held until they finish, so a `post` hook can
+undo what a `pre` hook did even when the run fails or you press Ctrl-C. SIGKILL cannot
+be handled, so it skips them.
+
+Hooks run in their own process group and get no standard input, so Ctrl-C at the
+terminal reaches rbtrfs and not the hook. systemd is different: by default it sends
+SIGTERM to every process in the service when it stops it. Set `KillMode=mixed` on the
+unit to signal only rbtrfs.
 
 With `on_failure = "abort"` a failing hook stops the run. With `"warn"` rbtrfs prints
 the error and carries on.
