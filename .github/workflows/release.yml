@@ -61,6 +61,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -69,8 +70,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          # release notes: this version's section of CHANGELOG.md
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} /^\[[^]]*\]: / {next} f' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "no CHANGELOG.md section for $version"; exit 1; }
+          printf '\nBinaries link dynamically against libbtrfsutil (package btrfs-progs or libbtrfsutil1, version 5.16 or newer) and need glibc 2.34 or newer.\n' >> notes.md
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --notes "Binaries link dynamically against libbtrfsutil (btrfs-progs 5.16 or newer; package btrfs-progs or libbtrfsutil1) and need glibc 2.34 or newer."
+            --notes-file notes.md
