@@ -1,10 +1,9 @@
 //! Deferred termination signals for the consistency window.
 //!
-//! Between the first pre-hook and the last post-hook the process must not die:
-//! a pre-hook may have quiesced a database or service that only the post-hook
-//! thaws. While a [`Deferred`] guard is alive SIGINT/SIGTERM/SIGHUP only set a
-//! flag; the caller checks it at safe points and winds down after the post-hooks
-//! have run.
+//! Between the first pre-hook and the last post-hook the process must not die: a
+//! pre-hook may have held something back that only the post-hook releases. While a
+//! [`Deferred`] guard is alive SIGINT/SIGTERM/SIGHUP only set a flag; the caller checks
+//! it at safe points and winds down after the post-hooks have run.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

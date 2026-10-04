@@ -10,8 +10,8 @@
 //! keep_local   = 1
 //!
 //! [profile.default.hooks]
-//! pre  = ["systemctl stop mydb"]
-//! post = ["systemctl start mydb"]
+//! pre  = ["/usr/local/bin/before-snapshot"]
+//! post = ["/usr/local/bin/after-snapshot"]
 //! on_failure = "abort"   # or "warn"
 //! ```
 

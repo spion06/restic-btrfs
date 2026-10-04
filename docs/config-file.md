@@ -46,8 +46,8 @@ profile name:
 
 ```toml
 [profile.default.hooks]
-pre  = ["systemctl stop mydb"]
-post = ["systemctl start mydb"]
+pre  = ["/usr/local/bin/before-snapshot"]
+post = ["/usr/local/bin/after-snapshot"]
 
 [profile.default.retention]
 keep_last  = 3

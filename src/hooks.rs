@@ -10,8 +10,8 @@ use crate::signals::Deferred;
 /// Run `body` (the snapshot burst) between the pre- and post-hooks.
 ///
 /// Post-hooks ALWAYS run, even if a pre-hook failed part-way or `body` errored:
-/// an earlier pre-hook may already have quiesced something that only a post-hook
-/// thaws. Termination signals are deferred for the whole window and surface as an
+/// an earlier pre-hook may already have held something back that only a post-hook
+/// releases. Termination signals are deferred for the whole window and surface as an
 /// error once the post-hooks have finished.
 pub fn window<T>(hooks: &Hooks, body: impl FnOnce() -> Result<T>) -> Result<T> {
     let guard = Deferred::install().context("deferring termination signals")?;
@@ -44,7 +44,7 @@ pub fn run_pre(hooks: &Hooks) -> Result<()> {
     run_all("pre", &hooks.pre, hooks.on_failure)
 }
 
-/// Post hooks always attempt to run every command (so a thaw is not skipped
+/// Post hooks always attempt to run every command (so a release is not skipped
 /// because an earlier post hook failed); failures still follow `on_failure`.
 pub fn run_post(hooks: &Hooks) -> Result<()> {
     let mut first_err = None;

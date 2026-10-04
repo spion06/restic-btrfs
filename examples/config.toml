@@ -45,6 +45,7 @@ keep_daily = 7
 keep_weekly = 4
 keep_monthly = 12
 
+# Commands to run just before and just after the snapshots are taken.
 [profile.default.hooks]
 pre = []
 post = []

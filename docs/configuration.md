@@ -13,8 +13,8 @@ exclude          = ["**/.cache", "*.tmp"]
 keep_local       = 1
 
 [profile.default.hooks]
-pre  = ["systemctl stop mydb"]
-post = ["systemctl start mydb"]
+pre  = ["/usr/local/bin/before-snapshot"]
+post = ["/usr/local/bin/after-snapshot"]
 
 [profile.default.retention]
 keep_last  = 3
@@ -196,7 +196,7 @@ and `rbtrfs ls` work like they do for subvolumes. It is also incremental, and th
 
 Extra paths are not snapshots. rbtrfs reads them live, after the snapshots are
 taken and after the `post` hooks have run. A file that changes while it is being
-read can end up inconsistent, and hooks cannot pause a service for an extra path.
+read can end up inconsistent, and hooks cannot help, because they have finished by then.
 For `/boot` that rarely matters.
 
 rbtrfs checks the paths before it takes any snapshot:
@@ -212,16 +212,17 @@ rbtrfs checks the paths before it takes any snapshot:
 ## Hooks
 
 `hooks.pre` runs before the snapshots are taken and `hooks.post` runs after. Each
-entry is passed to `sh -c`. Use them to pause something that writes to the
-subvolumes, as in the example above. The backup itself runs after `post`, so the
-pause only lasts as long as it takes to take the snapshots.
+entry is a shell command, passed to `sh -c`, and they run in the order listed. Use
+them to get an application's data into a consistent state before the snapshots and to
+release it again afterwards. The backup itself runs after `post`, from the snapshots,
+so nothing has to stay held back while it runs.
 
 Hooks run inside the private mount namespace rbtrfs uses. They see the same mounts
 as the host, but anything they mount is not visible outside.
 
 `post` hooks always run, even if a `pre` hook or the snapshot failed. SIGINT,
-SIGTERM and SIGHUP are held until they finish. This means a paused service is
-resumed on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
+SIGTERM and SIGHUP are held until they finish. This means whatever a `pre` hook
+set up is undone on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
 
 With `on_failure = "abort"` a failing hook stops the run. With `"warn"` rbtrfs prints
 the error and carries on.

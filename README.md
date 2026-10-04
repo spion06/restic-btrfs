@@ -32,8 +32,8 @@ one restic snapshot containing `/`, `/home`, `/srv` and whatever else you chose.
 - Generates its own man page and shell completions
 
 btrfs cannot snapshot several subvolumes atomically, so two files in different
-subvolumes may be a few milliseconds apart. Each file is consistent. Use hooks if
-something needs more.
+subvolumes may be a few milliseconds apart. Each file is consistent. If an
+application needs more than that, use hooks to get it into a consistent state first.
 
 ## Quick start
 

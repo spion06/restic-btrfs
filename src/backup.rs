@@ -89,7 +89,7 @@ pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutc
     let staged: Vec<(StagingArea, Vec<SnapJob>)> = areas.into_iter().zip(planned).collect();
     let all_jobs: Vec<SnapJob> = staged.iter().flat_map(|(_, j)| j.clone()).collect();
 
-    // Fail on a bad repository/password/excludes BEFORE quiescing anything.
+    // Fail on a bad repository/password/excludes BEFORE running any hook or taking any snapshot.
     let handle = RepoHandle::from_profile(profile)?;
     handle.open_or_init()?;
     let job_excludes: Vec<Vec<String>> = all_jobs
