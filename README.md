@@ -25,6 +25,7 @@ one restic snapshot containing `/`, `/home`, `/srv` and whatever else you chose.
 - Excludes files with restic-style patterns ([filtering](docs/filtering.md))
 - Applies a retention policy and prunes ([maintenance](docs/maintenance.md))
 - Restores to a directory or a new btrfs subvolume, and can list and print files from a backup
+- Stores to a local path, a REST server, rclone or an OpenDAL service such as S3 ([repository](docs/repository.md))
 - Can mount an NFS or CIFS repository privately for the run ([repository](docs/repository.md#a-share-that-is-not-mounted-on-the-host))
 - Generates its own man page and shell completions
 

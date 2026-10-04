@@ -3,6 +3,11 @@
 
 [profile.default]
 repository = "/mnt/backup/restic"
+# Backend settings (S3 and other OpenDAL services, rclone options) go in a table:
+#   repository = "opendal:s3"
+#   [profile.default.backend_options]
+#   bucket = "my-backups"
+#   region = "eu-west-1"
 # Repository on a share that is not mounted on the host? Let rbtrfs mount it privately
 # for the run, and point `repository` at a path below the target:
 #   repository = "/run/rbtrfs/repo/restic/mybox"

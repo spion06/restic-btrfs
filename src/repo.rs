@@ -1,7 +1,6 @@
 //! Thin helpers around a rustic_core repository.
 
 use anyhow::{Context, Result};
-use rustic_backend::BackendOptions;
 use rustic_core::{
     ConfigOptions, Credentials, KeyOptions, Repository, RepositoryBackends, RepositoryOptions,
 };
@@ -18,8 +17,8 @@ pub struct RepoHandle {
 impl RepoHandle {
     pub fn from_profile(profile: &Profile) -> Result<Self> {
         let password = profile.resolve_password()?;
-        let backends = BackendOptions::default()
-            .repository(&profile.repository)
+        let backends = profile
+            .backend()
             .to_backends()
             .context("configuring restic backend")?;
         Ok(Self {

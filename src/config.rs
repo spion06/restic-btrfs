@@ -34,6 +34,22 @@ pub struct Profile {
     /// restic repository location (`/path`, `rest:`, `s3:…`, `sftp:…`, …).
     pub repository: String,
 
+    /// A separate "hot" repository (rustic hot/cold setups). Optional.
+    #[serde(default)]
+    pub repository_hot: Option<String>,
+
+    /// Options passed to the storage backend (both hot and cold). The keys are
+    /// rustic's, for example `rclone-command`, or the settings of an `opendal:`
+    /// service such as `bucket` and `access_key_id`.
+    #[serde(default)]
+    pub backend_options: BTreeMap<String, String>,
+    /// Options for the hot repository only.
+    #[serde(default)]
+    pub backend_options_hot: BTreeMap<String, String>,
+    /// Options for the cold repository only.
+    #[serde(default)]
+    pub backend_options_cold: BTreeMap<String, String>,
+
     /// Mount a filesystem (NFS, CIFS, …) privately for the duration of the run, to
     /// hold a local-path `repository`. See [`RepositoryMount`].
     #[serde(default)]
@@ -225,6 +241,8 @@ impl Config {
         }
         if cfg.profile.values().any(|p| p.password.is_some()) {
             warn_if_accessible(path, "contains an inline `password`");
+        } else if cfg.profile.values().any(Profile::has_secret_backend_option) {
+            warn_if_accessible(path, "contains backend credentials");
         }
         for p in cfg.profile.values() {
             if let Some(f) = &p.password_file {
@@ -264,6 +282,32 @@ fn warn_if_accessible(path: &Path, why: &str) {
 }
 
 impl Profile {
+    /// Does any backend option look like a credential (key, secret, token, ...)?
+    fn has_secret_backend_option(&self) -> bool {
+        const HINTS: [&str; 5] = ["key", "secret", "token", "pass", "credential"];
+        self.backend_options
+            .keys()
+            .chain(self.backend_options_hot.keys())
+            .chain(self.backend_options_cold.keys())
+            .any(|k| {
+                let k = k.to_lowercase();
+                HINTS.iter().any(|h| k.contains(h))
+            })
+    }
+
+    /// The options to hand to rustic's backend factory.
+    pub fn backend(&self) -> rustic_backend::BackendOptions {
+        let mut b = rustic_backend::BackendOptions::default()
+            .repository(&self.repository)
+            .options(self.backend_options.clone())
+            .options_hot(self.backend_options_hot.clone())
+            .options_cold(self.backend_options_cold.clone());
+        if let Some(hot) = &self.repository_hot {
+            b = b.repo_hot(hot);
+        }
+        b
+    }
+
     fn validate(&self) -> Result<()> {
         let n = self.password.is_some() as u8
             + self.password_file.is_some() as u8
@@ -275,6 +319,9 @@ impl Profile {
         }
         if self.subvolumes.is_empty() {
             bail!("`subvolumes` must not be empty");
+        }
+        if !self.backend_options_hot.is_empty() && self.repository_hot.is_none() {
+            bail!("backend_options_hot needs `repository_hot` to be set");
         }
         if let Some(m) = &self.repository_mount {
             if m.fstype.trim().is_empty() || m.source.trim().is_empty() {
@@ -361,6 +408,56 @@ mod tests {
         ))
         .unwrap();
         cfg.profile("default").unwrap().validate()
+    }
+
+    #[test]
+    fn backend_options_reach_rustic_and_flag_credentials() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [profile.default]
+            repository = "opendal:s3"
+            repository_hot = "opendal:fs"
+            password = "x"
+            subvolumes = ["/home"]
+            [profile.default.backend_options]
+            bucket = "b"
+            access_key_id = "AKIA"
+            [profile.default.backend_options_cold]
+            retry = "3"
+            [profile.default.backend_options_hot]
+            root = "/hot"
+            "#,
+        )
+        .unwrap();
+        let p = cfg.profile("default").unwrap();
+        p.validate().unwrap();
+        let b = p.backend();
+        assert_eq!(b.repository.as_deref(), Some("opendal:s3"));
+        assert_eq!(b.repo_hot.as_deref(), Some("opendal:fs"));
+        assert_eq!(b.options["bucket"], "b");
+        assert_eq!(b.options_cold["retry"], "3");
+        assert_eq!(b.options_hot["root"], "/hot");
+        assert!(p.has_secret_backend_option());
+    }
+
+    #[test]
+    fn hot_options_need_a_hot_repository_and_plain_options_are_not_secret() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [profile.default]
+            repository = "/r"
+            password = "x"
+            subvolumes = ["/home"]
+            [profile.default.backend_options]
+            retry = "3"
+            [profile.default.backend_options_hot]
+            root = "/hot"
+            "#,
+        )
+        .unwrap();
+        let p = cfg.profile("default").unwrap();
+        assert!(p.validate().is_err());
+        assert!(!p.has_secret_backend_option());
     }
 
     #[test]

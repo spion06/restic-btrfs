@@ -1552,3 +1552,58 @@ fn repository_can_live_on_a_privately_mounted_filesystem() {
     sh(&format!("umount '{}'", peek.display()));
     assert!(out.status.success(), "{}", text(&out));
 }
+
+#[test]
+fn backend_options_reach_the_storage_backend() {
+    e2e!();
+    // opendal's built-in `fs` service needs a `root` option and nothing else, so it
+    // proves the options table is passed through without needing a network backend.
+    let fx = Fx::new("backendopts", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("f.txt"), b"through opendal").unwrap();
+    let root = fx.base().join("opendal-root");
+    fs::create_dir_all(&root).unwrap();
+    let cfg = |options: &str| {
+        format!(
+            "[profile.default]\nrepository = \"opendal:fs\"\npassword = \"pw\"\n\
+             subvolumes = [\"{}\"]\n{options}",
+            a.display()
+        )
+    };
+
+    // without the option the backend refuses to start
+    fs::write(&fx.cfg, cfg("")).unwrap();
+    let bad = fx.run(&["backup", "--dry-run"]);
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("root is not specified"),
+        "{}",
+        text(&bad)
+    );
+
+    fs::write(
+        &fx.cfg,
+        cfg(&format!(
+            "[profile.default.backend_options]\nroot = \"{}\"\n",
+            root.display()
+        )),
+    )
+    .unwrap();
+    fx.ok(&["backup"]);
+    assert!(fx.ok(&["snapshots"]).contains("merged"));
+    let restored = fx.restore("latest", a, "restored");
+    assert_eq!(
+        fs::read(restored.join("f.txt")).unwrap(),
+        b"through opendal"
+    );
+
+    // the data is in a plain restic repository under `root`
+    let out = Command::new("restic")
+        .env("RESTIC_PASSWORD", "pw")
+        .arg("-r")
+        .arg(&root)
+        .args(["check", "--read-data", "--no-lock"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+}

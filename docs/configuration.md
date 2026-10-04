@@ -30,6 +30,9 @@ is readable by anyone else.
 | Key | Default | Description |
 |---|---|---|
 | `repository` | required | Where the restic repository lives. See [Repository](repository.md). |
+| `repository_hot` | unset | A separate hot repository. See [Repository](repository.md#hot-and-cold-repositories). |
+| `backend_options` | `{}` | Settings for the storage backend. See [Repository](repository.md#backend-options). |
+| `backend_options_hot`, `backend_options_cold` | `{}` | The same, for the hot or the cold part only. |
 | `password`, `password_file`, `password_command` | one required | The repository password. Set exactly one. |
 | `subvolumes` | required | Mount points to back up. Exact paths or globs. |
 | `exclude` | `[]` | Patterns to leave out. See [Filtering](filtering.md). |
