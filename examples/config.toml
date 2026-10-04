@@ -28,6 +28,11 @@ tags = ["rbtrfs", "nightly"]
 keep_local = 2
 # zstd level for new data: 1..22, -7..-1 for the fast levels, 0 for none. Unset = default.
 # compression = 3
+# Priority of backup, forget and gc (defaults shown; 0 / "normal" to run flat out):
+# nice = 10
+# io_priority = "low"       # or "idle", "normal"
+# cpu_weight = 20           # systemd CPUWeight while the machine is busy (normal = 100)
+# io_weight = 20
 keep_local_days = 3
 
 # `rbtrfs forget` thins the repository with this policy (required by that command).

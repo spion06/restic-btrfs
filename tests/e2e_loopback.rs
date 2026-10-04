@@ -1888,3 +1888,66 @@ fn compression_level_is_applied_at_init_and_to_existing_repositories() {
         text(&bad)
     );
 }
+
+#[test]
+fn background_commands_run_with_low_priority_settings() {
+    e2e!();
+    let fx = Fx::new("priority", &["@a"]);
+    fs::write(fx.mounts[0].join("f"), b"x").unwrap();
+    let out = fx.base().join("prio");
+    fs::create_dir_all(&out).unwrap();
+
+    // Hooks inherit what rbtrfs sets on itself, so they can report it back.
+    let run = |settings: &str, tag: &str| -> (String, String, String) {
+        let (n, i, w) = (
+            out.join(format!("{tag}.nice")),
+            out.join(format!("{tag}.io")),
+            out.join(format!("{tag}.weight")),
+        );
+        fx.write_cfg(
+            &fx.mounts.clone(),
+            &format!(
+                "{settings}[profile.default.hooks]\npre = [\"nice > '{}'\", \"ionice -p $$ > '{}'\", \
+                 \"cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/cpu.weight > '{}' 2>/dev/null || true\"]\n",
+                n.display(),
+                i.display(),
+                w.display()
+            ),
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        fx.ok(&["backup"]);
+        let read = |p: &Path| fs::read_to_string(p).unwrap_or_default().trim().to_string();
+        (read(&n), read(&i), read(&w))
+    };
+
+    // defaults: nice 10, lowest best-effort I/O class
+    let (nice, io, weight) = run("", "default");
+    assert_eq!(nice, "10");
+    assert_eq!(io, "best-effort: prio 7");
+    if Path::new("/run/systemd/system").exists() {
+        assert_eq!(
+            weight, "20",
+            "default cgroup CPUWeight when systemd is available"
+        );
+    }
+
+    // tuned: everything can be changed or switched off
+    let (nice, io, _) = run(
+        "nice = 3\nio_priority = \"idle\"\ncpu_weight = 0\nio_weight = 0\n",
+        "tuned",
+    );
+    assert_eq!(nice, "3");
+    assert_eq!(io, "idle");
+
+    // `nice = 0` and `io_priority = "normal"` leave what the caller had alone
+    let inherited = sh("nice").trim().to_string();
+    let (nice, io, _) = run(
+        "nice = 0\nio_priority = \"normal\"\ncpu_weight = 0\nio_weight = 0\n",
+        "off",
+    );
+    assert_eq!(nice, inherited);
+    assert!(
+        io.starts_with("none") || io.starts_with("best-effort"),
+        "{io}"
+    );
+}

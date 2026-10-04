@@ -26,6 +26,10 @@ keep_daily = 7
 | Key | Default | Description |
 |---|---|---|
 | `repository` | required | Where the restic repository lives. See [Repository](repository.md). |
+| `nice` | `10` | Process niceness for `backup`, `forget` and `gc`. See [Priority](#priority). |
+| `io_priority` | `"low"` | Disk I/O priority: `"low"`, `"idle"` or `"normal"`. |
+| `cpu_weight` | `20` | CPU share under contention, `0` to turn off. |
+| `io_weight` | `20` | Disk share under contention, `0` to turn off. |
 | `compression` | unset | zstd compression level for new data. See [Compression](#compression). |
 | `repository_hot` | unset | A separate hot repository. See [Repository](repository.md#hot-and-cold-repositories). |
 | `backend_options` | `{}` | Settings for the storage backend. See [Repository](repository.md#backend-options). |
@@ -111,9 +115,67 @@ not rewritten. restic and rustic read both kinds without any setting.
 The level belongs to the repository, not to the profile. If two profiles back up to
 the same repository with different levels, each run switches it back.
 
-NB: the first backup of a large machine is mostly limited by CPU (chunking,
-hashing, compressing and encrypting), not by the network. A lower level may make it
-faster at the cost of a bigger repository. We have not measured how much.
+### Choosing a level
+
+zstd's own documentation describes the trade-off: higher levels generally give a
+better ratio at the cost of speed and memory, compression speed roughly halves every
+two levels, and the progression is not smooth because it depends on the data. The
+default is level 3, levels 1 to 19 are the normal range, and 20 to 22 use a lot more
+memory. See the [zstd manual](https://github.com/facebook/zstd/blob/dev/programs/zstd.1.md)
+and the [benchmarks on the zstd site](https://facebook.github.io/zstd/).
+
+For a feel of what it means in rbtrfs, this is a backup of 10 GB of mixed developer
+files (source trees, build output, toolchain binaries) to a local NVMe on a 16-thread
+Ryzen 7 5800X, with the files already in the page cache:
+
+| Level | Time | Repository | Ratio | CPU used |
+|---|---|---|---|---|
+| `0` (off) | 46 s | 6.8 GB | 1.5 | 187 s |
+| `-3` | 47 s | 3.3 GB | 3.1 | 193 s |
+| unset (3) | 49 s | 2.6 GB | 3.8 | 212 s |
+| `9` | 186 s | 2.5 GB | 4.0 | 1513 s |
+
+Up to the default level the time barely changes, so turning compression down or off
+does not make a backup faster here. Something other than compression, most likely
+chunking and hashing, sets the pace. Level 9 took four times as long and used all the
+cores for 4% less data. The default is a good choice unless your data is already
+compressed. Results depend heavily on the data, so measure your own if it matters.
+
+## Priority
+
+`backup`, `forget` and `gc` can run for a long time and use a lot of CPU, so by
+default they step aside for interactive programs. Four settings control this:
+
+| Key | Default | Effect |
+|---|---|---|
+| `nice` | `10` | Process niceness, `0` to `19`. `0` leaves it as it was. |
+| `io_priority` | `"low"` | `"low"` is the lowest best-effort class, `"idle"` only uses the disk when nothing else does, `"normal"` leaves it alone. |
+| `cpu_weight` | `20` | Share of the CPU when the machine is busy. Normal programs have 100. `0` turns it off. |
+| `io_weight` | `20` | Share of the disk when it is busy. Normal is 100. `0` turns it off. |
+
+`nice` and `io_priority` apply to rbtrfs and everything it starts, including `rclone`
+and your hooks. They only compete with programs in the same cgroup. A game or a
+desktop application usually runs in its own systemd scope, and in a test on a desktop
+kernel a nice 19 task and a nice 0 task in separate scopes each got about half of the
+CPU. That is why there are also weights.
+
+`cpu_weight` and `io_weight` are cgroup weights. When they are set, rbtrfs restarts
+itself once inside a transient `systemd-run --scope` with `CPUWeight` and
+`IOWeight`, which makes it yield to every other cgroup. The same test with a weight
+of 10 gave the low-priority side 18% instead of 50%. This happens only when rbtrfs
+runs as root on a systemd machine and is not already a systemd service. If
+`systemd-run` is not available, rbtrfs keeps going with just `nice` and
+`io_priority`.
+
+In a systemd service, set `CPUWeight=`, `IOWeight=` and, if you like, `Nice=` on the
+unit instead. rbtrfs still applies `nice` and `io_priority` itself.
+
+`io_priority` and `io_weight` only have an effect when the disk's I/O scheduler
+supports them (BFQ, or the `io.cost` controller). On an NVMe with the `none`
+scheduler they do nothing, and `nice` and `cpu_weight` do the work.
+
+To run flat out, for example for a first backup while you are away, set
+`nice = 0`, `cpu_weight = 0`, `io_weight = 0` and `io_priority = "normal"`.
 
 ## Extra paths
 

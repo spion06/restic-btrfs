@@ -17,6 +17,14 @@ fn main() -> Result<()> {
     if cli.command.needs_root(profile.as_ref()) && !rbtrfs::is_root() {
         anyhow::bail!("`{}` needs root", command_name(&cli.command));
     }
+    if let Some(p) = profile
+        .as_ref()
+        .filter(|_| cli.command.is_background_work())
+    {
+        // Before the namespace and any threads: a re-exec replaces the process.
+        rbtrfs::priority::reexec_in_scope(p)?;
+        rbtrfs::priority::apply_in_process(p);
+    }
     if cli.command.needs_namespace(profile.as_ref()) {
         rbtrfs::ns::enter_private_namespace().context("entering private mount namespace")?;
     }

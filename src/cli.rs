@@ -221,6 +221,16 @@ pub enum Command {
 }
 
 impl Command {
+    /// Long-running maintenance that should yield to interactive use.
+    pub fn is_background_work(&self) -> bool {
+        match self {
+            Command::Backup { dry_run, .. } => !dry_run,
+            Command::Forget { dry_run, .. } => !dry_run,
+            Command::Gc { .. } => true,
+            _ => false,
+        }
+    }
+
     /// Commands that only print, so a closed pipe may simply end them.
     pub fn is_read_only_output(&self) -> bool {
         matches!(

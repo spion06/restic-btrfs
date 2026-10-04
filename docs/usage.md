@@ -97,6 +97,10 @@ Persistent=true
 WantedBy=timers.target
 ```
 
+To keep it out of the way of other programs, add `Nice=10`, `CPUWeight=20` and
+`IOWeight=20` to the `[Service]` section. rbtrfs does not start a scope of its own
+when it runs inside a service. See [Priority](configuration.md#priority).
+
 Enable it with `systemctl enable --now rbtrfs.timer`. This example has not been
 tested as shipped; adjust the paths to your install.
 

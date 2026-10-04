@@ -35,6 +35,25 @@ pub struct Profile {
     /// restic repository location (`/path`, `rest:`, `s3:…`, `sftp:…`, …).
     pub repository: String,
 
+    /// Process niceness for backup, forget and gc: `0..=19`, higher yields more to
+    /// other programs. `0` leaves it alone.
+    #[serde(default = "default_nice")]
+    pub nice: i32,
+
+    /// Disk I/O priority for those commands.
+    #[serde(default)]
+    pub io_priority: IoPriority,
+
+    /// Relative CPU share (systemd `CPUWeight`, `1..=10000`, where normal programs
+    /// have 100) for backup, forget and gc. `0` turns it off.
+    #[serde(default = "default_weight")]
+    pub cpu_weight: u32,
+
+    /// Relative disk share (systemd `IOWeight`, `1..=10000`, normal is 100).
+    /// `0` turns it off.
+    #[serde(default = "default_weight")]
+    pub io_weight: u32,
+
     /// zstd compression level for new data: `1..=22`, `-7..=-1` for the fast levels,
     /// `0` for none. Unset means zstd's default level. Repository-wide.
     #[serde(default)]
@@ -262,6 +281,26 @@ pub enum HookFailure {
     Warn,
 }
 
+fn default_nice() -> i32 {
+    10
+}
+fn default_weight() -> u32 {
+    20
+}
+
+/// Disk I/O priority of a backup run.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum IoPriority {
+    /// Lowest best-effort priority.
+    #[default]
+    Low,
+    /// Only when the disk is otherwise idle. Can starve on a busy disk.
+    Idle,
+    /// Leave the priority alone.
+    Normal,
+}
+
 fn default_tags() -> Vec<String> {
     vec!["rbtrfs".to_string()]
 }
@@ -397,6 +436,17 @@ impl Profile {
         }
         if matches!(&self.subvolumes, Subvolumes::List(v) if v.is_empty()) {
             bail!("`subvolumes` must not be empty");
+        }
+        if !(0..=19).contains(&self.nice) {
+            bail!("nice must be between 0 and 19, got {}", self.nice);
+        }
+        for (name, w) in [
+            ("cpu_weight", self.cpu_weight),
+            ("io_weight", self.io_weight),
+        ] {
+            if w > 10_000 {
+                bail!("{name} must be between 1 and 10000 (0 turns it off), got {w}");
+            }
         }
         if let Some(c) = self.compression {
             if !(-7..=22).contains(&c) {
@@ -679,6 +729,32 @@ mod tests {
             p.extra_paths,
             [PathBuf::from("/boot"), PathBuf::from("/mnt/nas/share")]
         );
+    }
+
+    #[test]
+    fn priority_defaults_and_validation() {
+        let parse = |extra: &str| {
+            let cfg: Config = toml::from_str(&format!(
+                "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\n{extra}"
+            ))
+            .unwrap();
+            let p = cfg.profile("default").unwrap().clone();
+            p.validate().map(|_| p)
+        };
+        let d = parse("").unwrap();
+        assert_eq!(
+            (d.nice, d.io_priority, d.cpu_weight, d.io_weight),
+            (10, IoPriority::Low, 20, 20)
+        );
+        let c =
+            parse("nice = 0\nio_priority = \"idle\"\ncpu_weight = 0\nio_weight = 50\n").unwrap();
+        assert_eq!(
+            (c.nice, c.io_priority, c.cpu_weight, c.io_weight),
+            (0, IoPriority::Idle, 0, 50)
+        );
+        assert!(parse("nice = 20").is_err());
+        assert!(parse("nice = -5").is_err());
+        assert!(parse("cpu_weight = 10001").is_err());
     }
 
     #[test]
