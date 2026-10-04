@@ -17,9 +17,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ubuntu-26.04 rather than ubuntu-latest: the libbtrfsutil crate needs a
+  # libbtrfsutil header newer than the one in Ubuntu 24.04 (btrfs-progs 6.6).
   lint:
     name: fmt, clippy, unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -37,7 +39,7 @@ jobs:
     # privileged containers (the same path developers use), so the runner only
     # needs Docker: no restic or btrfs-progs install here.
     name: end-to-end (containers)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

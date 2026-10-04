@@ -11,8 +11,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Rust 1.91 or newer, plus the btrfs-progs headers (`libbtrfsutil`), `pkg-config` and
-libclang.
+Rust 1.91 or newer, plus `pkg-config`, libclang and the `libbtrfsutil` headers from
+btrfs-progs 6.8 or newer (see [Install](docs/install.md#from-source) if your
+distribution's are older).
 
 The end-to-end tests need root (loop devices, mounts). When you aren't root, each
 test re-runs itself in a privileged container, so you only need access to a Docker

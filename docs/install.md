@@ -13,14 +13,19 @@ your `PATH`:
     tar xzf rbtrfs-v0.1.0-x86_64-linux.tar.gz
     sudo install -m755 rbtrfs-v0.1.0-x86_64-linux/rbtrfs /usr/local/bin/
 
-The binary links against `libbtrfsutil`, which comes with `btrfs-progs`
-(`libbtrfsutil1` on Debian and Ubuntu). It needs glibc 2.35 or newer. `mount(8)` is
+The binary links against `libbtrfsutil`, which comes with `btrfs-progs` (package
+`libbtrfsutil1` on Debian and Ubuntu). Any version from btrfs-progs 5.16 on works.
+It needs glibc 2.34 or newer, which covers Debian 12, Ubuntu 22.04, RHEL 9 and
+anything more recent. `mount(8)` is
 only needed if you use `repository_mount`.
 
 ## From source
 
-You need Rust 1.91 or newer, the `libbtrfsutil` headers, `pkg-config` and libclang.
-On Debian and Ubuntu that is `libbtrfsutil-dev pkg-config libclang-dev`.
+You need Rust 1.91 or newer, `pkg-config`, libclang and the `libbtrfsutil` headers
+from btrfs-progs 6.8 or newer. Debian 13 and Ubuntu 25.10 or newer package those as
+`libbtrfsutil-dev`. On older distributions the packaged header is too old for the Rust
+bindings. `.github/scripts/install-libbtrfsutil.sh` builds and installs a current
+`libbtrfsutil` into `/usr/local`, which is what the release builds do.
 
     git clone https://github.com/spion06/restic-btrfs
     cd restic-btrfs

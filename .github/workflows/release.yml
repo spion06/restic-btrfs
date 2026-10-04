@@ -26,8 +26,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Built on Ubuntu 22.04 so the binary only needs glibc 2.34. That image's
+      # libbtrfsutil header is too old for the crate, so build a newer one; at runtime
+      # any libbtrfsutil.so.1 from btrfs-progs 5.16 or newer works.
       - name: Build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config libclang-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential pkg-config libclang-dev
+          .github/scripts/install-libbtrfsutil.sh
       - name: Tag must match the crate version
         run: |
           crate="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
@@ -67,4 +73,4 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "Binaries link dynamically against libbtrfsutil (package btrfs-progs / libbtrfsutil1) and need glibc 2.35 or newer."
+            --notes "Binaries link dynamically against libbtrfsutil (btrfs-progs 5.16 or newer; package btrfs-progs or libbtrfsutil1) and need glibc 2.34 or newer."
