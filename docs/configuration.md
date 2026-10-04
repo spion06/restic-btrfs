@@ -1,8 +1,7 @@
 # Configuration
 
-rbtrfs reads a TOML file with one or more named profiles. The default path is
-`/etc/rbtrfs/config.toml`. Use `--config FILE` or `$RBTRFS_CONFIG` to read a
-different file, and `--profile NAME` to pick a profile other than `default`.
+This page describes each setting. For how the file is laid out (profiles,
+sub-tables, value types, error messages) see [Config file format](config-file.md).
 [`examples/config.toml`](../examples/config.toml) has a complete example.
 
 ```toml
@@ -21,9 +20,6 @@ post = ["systemctl start mydb"]
 keep_last  = 3
 keep_daily = 7
 ```
-
-NB: if the file holds a password, make it readable by root only. rbtrfs warns if it
-is readable by anyone else.
 
 ## Keys
 

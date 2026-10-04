@@ -54,6 +54,7 @@ exclude       = ["**/.cache", "*.tmp"]
 
 - [Install](docs/install.md)
 - [Usage](docs/usage.md): configure, back up, restore, schedule, exit codes
+- [Config file format](docs/config-file.md)
 - [Configuration](docs/configuration.md)
 - [Filtering](docs/filtering.md)
 - [Repository](docs/repository.md)

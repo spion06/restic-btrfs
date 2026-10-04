@@ -16,7 +16,8 @@ exclude       = ["**/.cache", "*.tmp"]
 ```
 
 `subvolumes` are mount points. Run `rbtrfs discover` to see what is mounted. Every
-key is described in [Configuration](configuration.md). Use `--config FILE` or
+key is described in [Configuration](configuration.md). The file format is in
+[Config file format](config-file.md). Use `--config FILE` or
 `$RBTRFS_CONFIG` for a different file, and `--profile NAME` to pick another
 profile.
 

@@ -23,6 +23,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub profile: BTreeMap<String, Profile>,
@@ -504,6 +505,18 @@ mod tests {
         };
         assert!(bad.to_keep_options().is_err());
         assert!(Retention::default().is_empty());
+    }
+
+    #[test]
+    fn unknown_keys_are_errors_at_every_level() {
+        let bad = [
+            "[profil.default]\nrepository = \"/r\"",
+            "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\nkeep_loca = 1",
+            "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\n[profile.default.hook]\npre = []",
+        ];
+        for text in bad {
+            assert!(toml::from_str::<Config>(text).is_err(), "{text}");
+        }
     }
 
     #[test]
