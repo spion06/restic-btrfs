@@ -12,6 +12,8 @@ pub struct RepoHandle {
     repo_opts: RepositoryOptions,
     creds: Credentials,
     repository: String,
+    /// Wanted zstd level (`None` = leave the repository's setting alone).
+    compression: Option<i32>,
 }
 
 impl RepoHandle {
@@ -26,6 +28,7 @@ impl RepoHandle {
             repo_opts: RepositoryOptions::default(),
             creds: Credentials::password(password),
             repository: profile.repository.clone(),
+            compression: profile.compression,
         })
     }
 
@@ -40,18 +43,30 @@ impl RepoHandle {
 
     /// Open the repository, initializing it only if none exists yet. A wrong
     /// password or an unreachable backend is an error, never a reason to init.
+    ///
+    /// A configured `compression` is set when the repository is created, and
+    /// applied to an existing repository if it differs (it is a repository-wide
+    /// setting that only affects data written from then on).
     pub fn open_or_init(&self) -> Result<Repository<rustic_core::OpenStatus>> {
         if !self.exists()? {
+            let mut config = ConfigOptions::default();
+            if let Some(level) = self.compression {
+                config = config.set_compression(level);
+            }
             Repository::new(&self.repo_opts, &self.backends)?
-                .init(
-                    &self.creds,
-                    &KeyOptions::default(),
-                    &ConfigOptions::default(),
-                )
+                .init(&self.creds, &KeyOptions::default(), &config)
                 .context("initializing repository")?;
             self.ensure_locks_dir();
         }
-        self.open()
+        let mut repo = self.open()?;
+        if let Some(level) = self.compression {
+            if repo.config().compression != Some(level) {
+                repo.apply_config(&ConfigOptions::default().set_compression(level))
+                    .context("applying the compression setting to the repository")?;
+                println!("repository compression set to level {level}");
+            }
+        }
+        Ok(repo)
     }
 
     pub fn open(&self) -> Result<Repository<rustic_core::OpenStatus>> {

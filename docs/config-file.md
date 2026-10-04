@@ -67,7 +67,7 @@ header inside that table.
 | Type | Used for | Example |
 |---|---|---|
 | string | paths, commands, durations, option values | `"/mnt/backup"`, `"14d"` |
-| number | counts and days | `keep_local = 2` |
+| number | counts, days and levels | `keep_local = 2`, `compression = -3` |
 | array of strings | lists | `subvolumes = ["/", "/home"]`, `extra_paths = ["/boot"]` |
 | string or array | `subvolumes` only | `"all"` or `["/home"]` |
 | table | grouped settings | `[profile.default.hooks]` |

@@ -26,6 +26,8 @@ subvolumes = ["/", "/home", "/srv"]
 exclude = ["**/.cache", "*.tmp"]
 tags = ["rbtrfs", "nightly"]
 keep_local = 2
+# zstd level for new data: 1..22, -7..-1 for the fast levels, 0 for none. Unset = default.
+# compression = 3
 keep_local_days = 3
 
 # `rbtrfs forget` thins the repository with this policy (required by that command).

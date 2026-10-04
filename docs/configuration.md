@@ -26,6 +26,7 @@ keep_daily = 7
 | Key | Default | Description |
 |---|---|---|
 | `repository` | required | Where the restic repository lives. See [Repository](repository.md). |
+| `compression` | unset | zstd compression level for new data. See [Compression](#compression). |
 | `repository_hot` | unset | A separate hot repository. See [Repository](repository.md#hot-and-cold-repositories). |
 | `backend_options` | `{}` | Settings for the storage backend. See [Repository](repository.md#backend-options). |
 | `backend_options_hot`, `backend_options_cold` | `{}` | The same, for the hot or the cold part only. |
@@ -85,6 +86,34 @@ btrfs snapshots are not recursive. If a subvolume is nested inside one you selec
 it shows up as an empty directory in the backup unless you select it too. rbtrfs
 warns about every such subvolume, mounted or not. Read-only ones, such as snapper
 snapshots, are ignored.
+
+## Compression
+
+Repository data is compressed with zstd. That is the only algorithm the restic
+repository format has, so there is nothing to choose. `compression` sets the level:
+
+| Value | Meaning |
+|---|---|
+| unset | zstd's default level |
+| `0` | no compression |
+| `1` to `22` | higher levels give smaller data and take longer |
+| `-7` to `-1` | faster than level 1, with larger data |
+
+```toml
+compression = -3
+```
+
+The level is set when rbtrfs creates the repository. If the repository already
+exists and its level is different, rbtrfs changes it on the next backup and prints a
+line saying so. The change only affects data written afterwards. Existing data is
+not rewritten. restic and rustic read both kinds without any setting.
+
+The level belongs to the repository, not to the profile. If two profiles back up to
+the same repository with different levels, each run switches it back.
+
+NB: the first backup of a large machine is mostly limited by CPU (chunking,
+hashing, compressing and encrypting), not by the network. A lower level may make it
+faster at the cost of a bigger repository. We have not measured how much.
 
 ## Extra paths
 

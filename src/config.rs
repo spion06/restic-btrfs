@@ -35,6 +35,11 @@ pub struct Profile {
     /// restic repository location (`/path`, `rest:`, `s3:…`, `sftp:…`, …).
     pub repository: String,
 
+    /// zstd compression level for new data: `1..=22`, `-7..=-1` for the fast levels,
+    /// `0` for none. Unset means zstd's default level. Repository-wide.
+    #[serde(default)]
+    pub compression: Option<i32>,
+
     /// A separate "hot" repository (rustic hot/cold setups). Optional.
     #[serde(default)]
     pub repository_hot: Option<String>,
@@ -393,6 +398,11 @@ impl Profile {
         if matches!(&self.subvolumes, Subvolumes::List(v) if v.is_empty()) {
             bail!("`subvolumes` must not be empty");
         }
+        if let Some(c) = self.compression {
+            if !(-7..=22).contains(&c) {
+                bail!("compression must be between -7 and 22 (0 turns it off), got {c}");
+            }
+        }
         if !self.backend_options_hot.is_empty() && self.repository_hot.is_none() {
             bail!("backend_options_hot needs `repository_hot` to be set");
         }
@@ -669,6 +679,23 @@ mod tests {
             p.extra_paths,
             [PathBuf::from("/boot"), PathBuf::from("/mnt/nas/share")]
         );
+    }
+
+    #[test]
+    fn compression_level_is_validated() {
+        let parse = |c: &str| {
+            let cfg: Config = toml::from_str(&format!(
+                "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\ncompression = {c}\n"
+            ))
+            .unwrap();
+            cfg.profile("default").unwrap().validate()
+        };
+        for ok in ["0", "3", "22", "-7", "-1"] {
+            parse(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        for bad in ["23", "-8", "100"] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

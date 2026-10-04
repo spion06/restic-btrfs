@@ -1820,3 +1820,71 @@ fn bad_extra_paths_stop_the_run_before_anything_is_snapshotted() {
     try_path("/does/not/exist", "not a directory");
     try_path("relative/dir", "not an absolute path");
 }
+
+fn dir_bytes(p: &Path) -> u64 {
+    fs::read_dir(p)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| match e.metadata() {
+                    Ok(m) if m.is_dir() => dir_bytes(&e.path()),
+                    Ok(m) => m.len(),
+                    Err(_) => 0,
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+#[test]
+fn compression_level_is_applied_at_init_and_to_existing_repositories() {
+    e2e!();
+    let fx = Fx::new("compression", &["@a"]);
+    let a = &fx.mounts[0];
+    // 8 MB that compresses to almost nothing
+    let squashy = |tag: &str| {
+        format!("{tag} squashes well. ")
+            .repeat(8_000_000 / 22)
+            .into_bytes()
+    };
+    let input_len = squashy("one").len() as u64;
+    fs::write(a.join("one.txt"), squashy("one")).unwrap();
+
+    // level 0: stored uncompressed, so the data is about as big as the input
+    fx.write_cfg(&fx.mounts.clone(), "compression = 0\n");
+    fx.ok(&["backup"]);
+    let uncompressed = dir_bytes(&fx.repo().join("data"));
+    assert!(
+        uncompressed > input_len * 9 / 10,
+        "level 0 should not compress: {uncompressed} bytes stored for {input_len}"
+    );
+
+    // switch an existing repository to zstd level 3: only NEW data is compressed
+    fx.write_cfg(&fx.mounts.clone(), "compression = 3\n");
+    fs::write(a.join("two.txt"), squashy("two")).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    let out = fx.ok(&["backup"]);
+    assert!(out.contains("compression set to level 3"), "{out}");
+    let grown = dir_bytes(&fx.repo().join("data")) - uncompressed;
+    assert!(
+        grown < 1_000_000,
+        "new data should be compressed, repository grew by {grown} bytes"
+    );
+
+    // an unchanged setting is not re-applied, and everything restores and verifies
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(!fx.ok(&["backup"]).contains("compression set"));
+    let restored = fx.restore("latest", a, "restored");
+    assert_eq!(fs::read(restored.join("one.txt")).unwrap(), squashy("one"));
+    assert_eq!(fs::read(restored.join("two.txt")).unwrap(), squashy("two"));
+    fx.restic_check();
+
+    // out-of-range levels are a config error
+    fx.write_cfg(&fx.mounts.clone(), "compression = 99\n");
+    let bad = fx.run(&["backup", "--dry-run"]);
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("compression must be between"),
+        "{}",
+        text(&bad)
+    );
+}

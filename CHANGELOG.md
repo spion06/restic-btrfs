@@ -13,6 +13,7 @@ All notable changes are documented here. The format follows
   `keep_local_days`.
 - Hooks that always run after the snapshot and survive SIGINT/SIGTERM.
 - `backend_options`, `backend_options_hot`, `backend_options_cold` and `repository_hot` to configure the storage backend (rclone, OpenDAL, REST).
+- `compression` to set the zstd level of the repository (set at creation, applied to an existing repository when it differs).
 - `extra_paths` to back up directories from non-btrfs filesystems (read live) in the same backup.
 - `subvolumes = "all"` and `exclude_subvolumes` to select every mounted subvolume except some.
 - `repository_mount` to mount an NFS/CIFS/etc. repository privately for a run.
