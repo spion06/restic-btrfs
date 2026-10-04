@@ -51,6 +51,12 @@ exclude_if_present = []                              # skip nothing, back up cac
 The directory is skipped completely. It is not even stored as an empty directory.
 rbtrfs only checks that the file exists, not that it holds the signature.
 
+Anyone who can write into a directory can put a marker in it and so keep it out of
+your backups. To see what was left out this way, run `rbtrfs backup --report-excluded`
+or set `report_excluded = true`. It lists those directories with their sizes, by their
+path on the running system. It costs one extra walk over the files, a few seconds for
+several hundred thousand.
+
 `exclude_if_xattr` does the same with an extended attribute on a file or directory,
 for tagging things with `setfattr -n user.nobackup -v 1 some/dir`:
 

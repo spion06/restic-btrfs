@@ -33,6 +33,7 @@ pub fn run(
     dry_run: bool,
     scan_files: bool,
     auto_init: bool,
+    report_excluded: bool,
 ) -> Result<RunOutcome> {
     let run_id = runid::now();
     let filesystems = discover::discover()?;
@@ -145,6 +146,20 @@ pub fn run(
             Ok(SnapshotFile::default().time)
         })?;
         println!("snapshotted {} subvolume(s)", all_jobs.len());
+        if report_excluded || profile.report_excluded {
+            let sources = all_jobs
+                .iter()
+                .zip(&job_excludes)
+                .map(|(j, g)| (&j.dest, &j.record_path, g))
+                .chain(
+                    extras
+                        .paths
+                        .iter()
+                        .zip(&extra_excludes)
+                        .map(|(e, g)| (&e.path, &e.path, g)),
+                );
+            report_marker_exclusions(profile, sources);
+        }
 
         // --- back up each read-only snapshot, recording the real mount point ---
         let backup_part = |key: &str,
@@ -496,5 +511,52 @@ fn report_file_selection(
                 s.unreadable
             );
         }
+    }
+}
+
+/// List the directories left out because of an `exclude_if_present` or
+/// `exclude_if_xattr` marker, as paths on the running system. Anyone who can write into
+/// a directory can add a marker to it, so this is how you notice.
+fn report_marker_exclusions<'a>(
+    profile: &Profile,
+    sources: impl Iterator<Item = (&'a PathBuf, &'a PathBuf, &'a Vec<String>)>,
+) {
+    let markers = crate::dryrun::Markers {
+        present: &profile.exclude_if_present,
+        xattr: &profile.exclude_if_xattr,
+    };
+    if markers.present.is_empty() && markers.xattr.is_empty() {
+        return;
+    }
+    let mut left_out = Vec::new();
+    for (read, record, globs) in sources {
+        // the walker reports canonical paths, the globs were built for them too
+        let root = std::fs::canonicalize(read).unwrap_or_else(|_| read.clone());
+        match crate::dryrun::scan(&root, globs.clone(), &markers) {
+            Ok(s) => {
+                for e in s.excluded {
+                    if let Some(why) = e.reason {
+                        let shown = e
+                            .path
+                            .strip_prefix(&root)
+                            .map_or(e.path.clone(), |rel| record.join(rel));
+                        left_out.push((e.bytes, shown, why));
+                    }
+                }
+            }
+            Err(e) => eprintln!("rbtrfs: warning: could not scan {}: {e:#}", read.display()),
+        }
+    }
+    left_out.sort_by_key(|a| std::cmp::Reverse(a.0));
+    println!(
+        "left out because of a marker: {} director(ies)",
+        left_out.len()
+    );
+    for (bytes, path, why) in &left_out {
+        println!(
+            "    {:>9}  {}  ({why})",
+            crate::dryrun::human(*bytes),
+            path.display()
+        );
     }
 }

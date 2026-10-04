@@ -91,6 +91,11 @@ pub enum Command {
         /// Same as `auto_init = false` in the profile.
         #[arg(long)]
         no_init: bool,
+        /// List the directories left out because they hold a marker file
+        /// (`exclude_if_present`, such as CACHEDIR.TAG) or an extended attribute
+        /// (`exclude_if_xattr`). Same as `report_excluded = true` in the profile.
+        #[arg(long)]
+        report_excluded: bool,
     },
     /// Create the repository.
     ///
@@ -324,11 +329,13 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             dry_run,
             no_scan,
             no_init,
+            report_excluded,
             ..
         } => {
             let p = loaded.clone().expect("profile loaded for this command");
             let auto_init = p.auto_init && !*no_init;
-            let outcome = backup::run(&p, *dry_run, !*no_scan, auto_init).context("backup run")?;
+            let outcome = backup::run(&p, *dry_run, !*no_scan, auto_init, *report_excluded)
+                .context("backup run")?;
             if !*dry_run {
                 println!(
                     "done: run {} — {} part(s), merged {}, {} local snapshot(s) gc'd",

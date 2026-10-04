@@ -124,6 +124,12 @@ pub struct Profile {
     #[serde(default = "default_true")]
     pub auto_init: bool,
 
+    /// Print the directories that were left out because they hold a marker file or
+    /// extended attribute (`exclude_if_present`, `exclude_if_xattr`). Costs one extra
+    /// walk over the files. `backup --report-excluded` does it for a single run.
+    #[serde(default)]
+    pub report_excluded: bool,
+
     /// Tags to set on the merged snapshot.
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,

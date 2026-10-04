@@ -2003,7 +2003,15 @@ fn marker_files_and_xattrs_exclude_directories() {
         plan.contains(&format!("{}/cache  (contains CACHEDIR.TAG)", a.display())),
         "{plan}"
     );
-    fx.ok(&["backup"]);
+    // reporting is opt in, and names the directory as it is on the running system
+    let quiet = fx.ok(&["backup"]);
+    assert!(!quiet.contains("left out because of a marker"), "{quiet}");
+    std::thread::sleep(Duration::from_millis(1100));
+    let report = fx.ok(&["backup", "--report-excluded"]);
+    assert!(
+        report.contains(&format!("{}/cache  (contains CACHEDIR.TAG)", a.display())),
+        "{report}"
+    );
     assert_eq!(restore("r1"), ["custom", "keep", "tagged"]);
 
     // any marker file name and extended attribute can be added

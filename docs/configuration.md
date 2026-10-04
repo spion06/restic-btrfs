@@ -40,6 +40,7 @@ keep_daily = 7
 | `exclude_subvolumes` | `[]` | Mount points to leave out of `subvolumes`. Exact paths or globs. |
 | `exclude` | `[]` | Patterns to leave out. See [Filtering](filtering.md). |
 | `exclude_if_present` | `["CACHEDIR.TAG"]` | Skip directories that contain a file with one of these names. See [Filtering](filtering.md#cache-directories-and-other-markers). |
+| `report_excluded` | `false` | List the directories left out by `exclude_if_present` or `exclude_if_xattr` during a backup. See [Filtering](filtering.md#cache-directories-and-other-markers). |
 | `exclude_if_xattr` | `[]` | Skip files and directories that have one of these extended attributes. |
 | `auto_init` | `true` | Create the repository on the first backup. With `false`, `backup` fails if there is none; create it with `rbtrfs init`. `backup --no-init` does the same for one run. |
 | `tags` | `["rbtrfs"]` | Tags to put on each backup. |

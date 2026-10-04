@@ -32,6 +32,10 @@ With `--dry-run`, skip the walk over the files and only print the plan.
 
 Fail if the repository does not exist instead of creating it. Same as `auto_init = false` in the profile.
 
+### `--report-excluded`
+
+List the directories left out because they hold a marker file (`exclude_if_present`, such as CACHEDIR.TAG) or an extended attribute (`exclude_if_xattr`). Same as `report_excluded = true` in the profile.
+
 ### `-c, --config <CONFIG>`
 
 Config file. Defaults to $RBTRFS_CONFIG, then /etc/rbtrfs/config.toml.
