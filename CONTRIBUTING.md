@@ -59,7 +59,9 @@ manual release. Commits that are not conventional are ignored by the changelog.
 
 ## Releasing
 
-Releases are made from the Actions tab: **release → Run workflow**.
+There are two ways to release. Both run the same build, CI and publish steps.
+
+**From the Actions tab:** **release → Run workflow**.
 
 - **bump** is `auto` (work out the version from the commits since the last tag) or a
   forced `patch`, `minor` or `major`.
@@ -70,9 +72,23 @@ A real run bumps `version` in `Cargo.toml` and `Cargo.lock`, writes the new sect
 into `CHANGELOG.md`, builds the x86_64 and aarch64 tarballs from that commit, and runs
 the CI checks. Only if all of that passes does it push the release commit to `main`,
 tag it and publish the GitHub release, with the changelog section as the notes. If
-anything fails, `main` is untouched and you can simply run it again. With `auto` and no
-`feat`, `fix`, `docs`, `perf` or `refactor` commits since the last tag it stops with
-"nothing to release".
+anything fails, `main` is untouched and you can simply run it again.
+
+**By pushing a tag:** prepare the release commit yourself, then push a `vX.Y.Z` tag.
+
+    .github/scripts/prepare-release.sh auto     # needs git-cliff; or patch, minor, major
+    git add Cargo.toml Cargo.lock CHANGELOG.md
+    git commit -m "chore(release): vX.Y.Z"
+    git tag -a vX.Y.Z -m "rbtrfs X.Y.Z"
+    git push origin main vX.Y.Z
+
+The workflow checks that the tag matches the version in `Cargo.toml` and that
+`CHANGELOG.md` has a section for it, then builds and publishes the tag as it is. If the
+build fails nothing is published; delete the tag (`git push origin :vX.Y.Z`), fix the
+problem and tag again.
+
+With `auto` and no `feat`, `fix`, `docs`, `perf` or `refactor` commits since the last
+tag, the script stops with "nothing to release".
 
 The configuration is in `cliff.toml` (git-cliff) and `.github/scripts/prepare-release.sh`.
 

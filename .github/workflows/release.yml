@@ -1,12 +1,16 @@
 name: release
 
-# Manual release: Actions > release > Run workflow.
+# Two ways to release:
 #
-# Works out the next version from the conventional commits since the last tag (or
+# 1. Actions > release > Run workflow. Works out the next version from the conventional commits since the last tag (or
 # uses the bump you choose), updates Cargo.toml, Cargo.lock and CHANGELOG.md, builds
 # the tarballs from that commit, and only when everything has passed pushes the
 # release commit to main, tags it and publishes the release. If anything fails, main
 # is left alone. Run it once with "dry run" ticked to see the version and changelog.
+#
+# 2. Push a tag by hand (vX.Y.Z). The tagged commit must already have that version in
+# Cargo.toml and a matching section in CHANGELOG.md (.github/scripts/prepare-release.sh
+# makes both locally). The same build, CI and publish steps then run for that tag.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +23,8 @@ on:
         description: "Only show the next version and changelog; publish nothing"
         type: boolean
         default: false
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -36,14 +42,16 @@ jobs:
     permissions:
       contents: write # pushes the release branch
     outputs:
-      version: ${{ steps.prepare.outputs.version }}
-      sha: ${{ steps.commit.outputs.sha }}
+      version: ${{ steps.prepare.outputs.version || steps.tagged.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha || steps.tagged.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ github.event_name == 'workflow_dispatch' }}
       - name: Install git-cliff
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           v="${GIT_CLIFF_VERSION#v}"
           curl -sSfL "https://github.com/orhun/git-cliff/releases/download/${GIT_CLIFF_VERSION}/git-cliff-${v}-x86_64-unknown-linux-gnu.tar.gz" \
@@ -51,12 +59,25 @@ jobs:
           git-cliff --version
       - name: Work out the next version
         id: prepare
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           BUMP: ${{ inputs.bump }}
         run: .github/scripts/prepare-release.sh "$BUMP"
+      - name: Use the tagged commit
+        id: tagged
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          test "$version" = "$crate" || { echo "tag ${GITHUB_REF_NAME} does not match the version in Cargo.toml ($crate)"; exit 1; }
+          # release notes: this version's section of CHANGELOG.md
+          awk -v v="$version" '$0 ~ "^## " v "( |$)" {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          test -s release-notes.md || { echo "no CHANGELOG.md section for $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Show the plan
         env:
-          VERSION: ${{ steps.prepare.outputs.version }}
+          VERSION: ${{ steps.prepare.outputs.version || steps.tagged.outputs.version }}
         run: |
           {
             echo "## Release v${VERSION}"
@@ -65,7 +86,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Commit the release to a branch
         id: commit
-        if: ${{ !inputs.dry_run }}
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
         run: |
@@ -148,17 +169,25 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          # Fast-forward main to the release commit. Fails, leaving main alone, if main
-          # has moved since the release was prepared: just run the workflow again.
-          git fetch origin "release/v${VERSION}"
-          git merge --ff-only "$SHA"
-          git push origin HEAD:main
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # Fast-forward main to the release commit. Fails, leaving main alone, if main
+            # has moved since the release was prepared: just run the workflow again.
+            git fetch origin "release/v${VERSION}"
+            git merge --ff-only "$SHA"
+            git push origin HEAD:main
+            target="--target $SHA"
+          else
+            # a tag pushed by hand: the commit and tag already exist
+            target="--verify-tag"
+          fi
 
           mv dist/release-notes.md notes.md
           printf '\nBinaries link dynamically against libbtrfsutil (package btrfs-progs or libbtrfsutil1, version 5.16 or newer) and need glibc 2.34 or newer.\n' >> notes.md
           gh release create "v${VERSION}" dist/*.tar.gz dist/*.sha256 \
             --repo "${GITHUB_REPOSITORY}" \
-            --target "$SHA" \
+            $target \
             --title "v${VERSION}" \
             --notes-file notes.md
-          git push origin --delete "release/v${VERSION}" || true
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            git push origin --delete "release/v${VERSION}" || true
+          fi
