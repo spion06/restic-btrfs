@@ -34,11 +34,10 @@ mount.
 A mount namespace isolates the mount table, not the directories under it. Mounts made
 by one rbtrfs process are invisible to every other process, as intended. But a mount
 point is an ordinary directory on the shared `/run`, and removing a directory makes
-Linux detach whatever is mounted on it in every namespace. Release 0.1.0 removed the
-mount-point directory when it exited, which pulled the repository out from under a
-second, running rbtrfs process (only with `repository_mount`, and only while another
-rbtrfs command ran at the same time). The directories are now never removed, and a test runs
-several processes against the same path to keep it that way. The repository does not
+Linux detach whatever is mounted on it in every namespace. We found this as a bug in
+0.1.0: removing the mount-point directory on exit detached the repository from another
+rbtrfs process that was still running. The directories are no longer removed, and a
+test runs several processes against the same path to keep it that way. The repository does not
 record where it is mounted (its config holds a version, an ID and a chunker value;
 snapshots hold the host and the source paths), so the mount path could also differ per
 run without affecting restic.
