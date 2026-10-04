@@ -122,6 +122,22 @@ pub fn burst(btrfs: &dyn BtrfsOps, jobs: &[SnapJob]) -> Result<()> {
     Ok(())
 }
 
+/// Delete the snapshots of a run that failed part-way. Missing ones are fine (the
+/// burst may not have reached them); anything else is reported and left for `gc`.
+pub fn discard(btrfs: &dyn BtrfsOps, jobs: &[SnapJob]) {
+    for j in jobs {
+        if !j.dest.exists() {
+            continue;
+        }
+        if let Err(e) = btrfs.delete_subvolume(&j.dest) {
+            eprintln!(
+                "rbtrfs: warning: could not remove {} after the failed run: {e:#}",
+                j.dest.display()
+            );
+        }
+    }
+}
+
 /// Which local snapshot sets survive a GC.
 #[derive(Debug, Clone, Copy)]
 pub struct LocalRetention {

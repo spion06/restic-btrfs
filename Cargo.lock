@@ -3960,6 +3960,7 @@ dependencies = [
  "glob",
  "jiff",
  "libbtrfsutil",
+ "log",
  "nix",
  "rustic_backend",
  "rustic_core",

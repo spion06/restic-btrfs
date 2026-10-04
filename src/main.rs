@@ -42,6 +42,7 @@ fn main() -> Result<()> {
         };
     }
 
+    rbtrfs::logging::init();
     rbtrfs::cli::run(cli, profile)
 }
 

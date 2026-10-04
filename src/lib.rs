@@ -2,6 +2,22 @@
 //!
 //! See `docs/architecture.md` for how it works and why.
 
+// A closed stdout/stderr (`rbtrfs backup | head`, a dead journal pipe) must not panic
+// and kill a run half-way, so output ignores write errors. Textual scope: these
+// shadow std's macros in every module below.
+macro_rules! println {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+macro_rules! eprintln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 pub mod backup;
 pub mod btrfs;
 pub mod cli;
@@ -15,6 +31,7 @@ pub mod gc;
 pub mod gendocs;
 pub mod hooks;
 pub mod lock;
+pub mod logging;
 pub mod mountinfo;
 pub mod ns;
 pub mod priority;

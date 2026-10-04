@@ -76,9 +76,16 @@ fn compile(patterns: &[String], what: &str) -> Result<Vec<(String, glob::Pattern
         .collect()
 }
 
+/// `*` and `?` stop at `/` (`/home/*` is one level), `**` crosses directories.
+const MATCH: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
+
 fn any_match(matchers: &[(String, glob::Pattern)], m: &BtrfsMount) -> bool {
     matchers.iter().any(|(raw, pat)| {
-        m.mount_point.as_path() == Path::new(raw) || pat.matches_path(&m.mount_point)
+        m.mount_point.as_path() == Path::new(raw) || pat.matches_path_with(&m.mount_point, MATCH)
     })
 }
 
@@ -205,6 +212,28 @@ mod tests {
 
     fn list(p: &[&str]) -> Subvolumes {
         Subvolumes::List(pats(p))
+    }
+
+    #[test]
+    fn single_star_does_not_cross_directories() {
+        let fss = fss();
+        let r = resolve(&fss, &list(&["/*"]), &[]).unwrap();
+        let mps: Vec<_> = r
+            .selections
+            .iter()
+            .flat_map(|s| s.selected.iter().map(|m| m.mount_point.clone()))
+            .collect();
+        assert!(mps.contains(&PathBuf::from("/home")));
+        assert!(mps.contains(&PathBuf::from("/srv")));
+        assert!(!mps.contains(&PathBuf::from("/home/vm")), "{mps:?}");
+        assert!(!mps.contains(&PathBuf::from("/srv/data")), "{mps:?}");
+        // `**` still crosses directories
+        let r = resolve(&fss, &list(&["/home/**"]), &[]).unwrap();
+        assert!(r
+            .selections
+            .iter()
+            .flat_map(|s| &s.selected)
+            .any(|m| m.mount_point.as_path() == Path::new("/home/vm")));
     }
 
     #[test]

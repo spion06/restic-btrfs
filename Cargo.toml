@@ -32,6 +32,7 @@ name = "spike_full_spine"
 path = "spikes/full_spine.rs"
 
 [dependencies]
+log = "0.4"
 rustic_core = "0.13"
 rustic_backend = "0.7"
 anyhow = "1"

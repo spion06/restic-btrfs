@@ -2126,3 +2126,133 @@ fn auto_init_false_in_the_config_disables_creation() {
     fx.ok(&["init"]);
     fx.ok(&["backup"]);
 }
+
+#[test]
+fn extra_paths_stay_on_their_own_filesystem() {
+    e2e!();
+    let fx = Fx::new("extrafs", &["@a"]);
+    fs::write(fx.mounts[0].join("f"), b"x").unwrap();
+
+    let outer = fx.base().join("ext");
+    let nested = outer.join("nested");
+    fs::create_dir_all(&outer).unwrap();
+    sh(&format!("mount -t tmpfs tmpfs '{}'", outer.display()));
+    fs::create_dir_all(&nested).unwrap();
+    sh(&format!("mount -t tmpfs tmpfs '{}'", nested.display()));
+    fs::write(outer.join("here.txt"), b"on the extra path's filesystem").unwrap();
+    fs::write(nested.join("there.txt"), b"on another filesystem").unwrap();
+
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        &format!("extra_paths = [\"{}\"]\n", outer.display()),
+    );
+    fx.ok(&["backup"]);
+
+    let listing = fx.ok(&["ls", "latest"]);
+    assert!(
+        listing.contains(&format!("{}/here.txt", outer.display())),
+        "{listing}"
+    );
+    assert!(
+        !listing.contains("there.txt"),
+        "a filesystem mounted inside an extra path must not be backed up:\n{listing}"
+    );
+}
+
+#[test]
+fn a_failed_run_removes_its_own_snapshots_but_keeps_the_earlier_ones() {
+    e2e!();
+    let fx = Fx::new("failcleanup", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("f"), b"x").unwrap();
+    fx.ok(&["backup"]);
+    assert_eq!(fx.local_runs(a).len(), 1);
+
+    // the snapshots are taken, then the post hook fails the run
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        "[profile.default.hooks]\npost = [\"false\"]\n",
+    );
+    let out = fx.run(&["backup"]);
+    assert!(!out.status.success());
+    assert_eq!(
+        fx.local_runs(a).len(),
+        1,
+        "only the earlier run's snapshot remains: {}",
+        text(&out)
+    );
+}
+
+#[test]
+fn hooks_do_not_receive_the_terminals_ctrl_c() {
+    e2e!();
+    use std::os::unix::process::CommandExt;
+    let fx = Fx::new("hooksig", &["@a"]);
+    let marker = fx.base().join("hook-finished");
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        &format!(
+            "[profile.default.hooks]\npre = [\"sleep 2; touch '{}'\"]\n",
+            marker.display()
+        ),
+    );
+    // Its own process group, like a foreground job: Ctrl-C signals the whole group.
+    let child = fx
+        .cmd(&["backup"])
+        .process_group(0)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    sh(&format!("kill -INT -- -{}", child.id()));
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        marker.exists(),
+        "the hook must run to the end, only rbtrfs is signalled:\n{}",
+        text(&out)
+    );
+}
+
+#[test]
+fn a_repository_inside_a_selected_subvolume_is_not_backed_up_into_itself() {
+    e2e!();
+    let fx = Fx::new("selfbackup", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("keep.txt"), b"data").unwrap();
+    let repo = a.join("repo");
+    fx.write_cfg_keep_repo_mount(
+        &format!(
+            "[profile.default]\nrepository = \"{}\"\npassword = \"pw\"\nsubvolumes = [\"{}\"]\n",
+            repo.display(),
+            a.display()
+        ),
+        "",
+    );
+    fx.ok(&["backup"]);
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.ok(&["backup"]);
+    let listing = fx.ok(&["ls", "latest"]);
+    assert!(
+        listing.contains(&format!("{}/keep.txt", a.display())),
+        "{listing}"
+    );
+    assert!(
+        !listing.contains(&format!("{}/repo/", a.display())),
+        "the repository must not be in the backup:\n{listing}"
+    );
+}
+
+#[test]
+fn the_run_lock_is_private_to_root() {
+    e2e!();
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new("lockperms", &["@a"]);
+    fs::write(fx.mounts[0].join("f"), b"x").unwrap();
+    fx.ok(&["backup"]);
+    let mode = |p: &str| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode("/run/rbtrfs"), 0o700);
+    assert_eq!(mode("/run/rbtrfs/rbtrfs.lock"), 0o600);
+}

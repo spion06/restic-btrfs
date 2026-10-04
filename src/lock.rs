@@ -10,7 +10,8 @@
 //! writes no restic lock files, so `restic forget --prune` can still run
 //! concurrently with a backup. See the README.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{DirBuilder, File, OpenOptions};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -29,14 +30,24 @@ pub struct RunLock {
 /// Take the exclusive run lock, failing immediately if another run holds it.
 pub fn acquire() -> Result<RunLock> {
     let dir = run_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("restricting {}", dir.display()))?;
     let path = dir.join("rbtrfs.lock");
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(0o600)
         .open(&path)
         .with_context(|| format!("opening lock file {}", path.display()))?;
+    // A file left by an older version keeps its old mode otherwise.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("restricting {}", path.display()))?;
     match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
         Ok(flock) => Ok(RunLock { _flock: flock }),
         Err((_, Errno::EWOULDBLOCK)) => {

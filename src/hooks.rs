@@ -1,6 +1,7 @@
 //! Pre/post snapshot hook execution.
 
-use std::process::Command;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -74,7 +75,14 @@ fn run_all(kind: &str, cmds: &[String], on_failure: HookFailure) -> Result<()> {
 }
 
 fn run_one(kind: &str, cmd: &str) -> Result<()> {
-    let status = Command::new("sh").arg("-c").arg(cmd).status()?;
+    // Own process group and no stdin: a Ctrl-C at the terminal reaches rbtrfs only
+    // (which defers it until the post hooks are done), not the hook.
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::null())
+        .process_group(0)
+        .status()?;
     if !status.success() {
         bail!("{kind}-hook `{cmd}` exited with {status}");
     }

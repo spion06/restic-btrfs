@@ -466,6 +466,17 @@ impl Profile {
         if self.exclude_if_xattr.iter().any(|x| x.is_empty()) {
             bail!("exclude_if_xattr entries must not be empty");
         }
+        let mut parts = Path::new(&self.staging_name).components();
+        if !matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) || self.staging_name.contains('/')
+        {
+            bail!(
+                "staging_name must be a single directory name, got {:?}",
+                self.staging_name
+            );
+        }
         if !(0..=19).contains(&self.nice) {
             bail!("nice must be between 0 and 19, got {}", self.nice);
         }
@@ -811,6 +822,25 @@ mod tests {
         assert!(parse("nice = 20").is_err());
         assert!(parse("nice = -5").is_err());
         assert!(parse("cpu_weight = 10001").is_err());
+    }
+
+    #[test]
+    fn staging_name_must_be_one_directory_name() {
+        let parse = |extra: &str| {
+            let cfg: Config = toml::from_str(&format!(
+                "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\n{extra}"
+            ))
+            .unwrap();
+            let p = cfg.profile("default").unwrap().clone();
+            p.validate().map(|_| p)
+        };
+        assert!(parse("staging_name = \"snaps\"").is_ok());
+        for bad in ["", ".", "..", "../x", "a/b", "/abs", "a/"] {
+            assert!(
+                parse(&format!("staging_name = {bad:?}")).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
     }
 
     #[test]

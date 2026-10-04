@@ -1,12 +1,12 @@
 //! The `backup` run: select → stage → burst → per-subvol backup → merge → GC.
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rustic_core::{
     repofile::{Node, SnapshotFile},
-    BackupOptions, Excludes, LocalSourceFilterOptions, ParentOptions, PathList, SnapshotOptions,
+    BackupOptions, Excludes, LocalSourceFilterOptions, PathList, SnapshotOptions,
 };
 
 use crate::btrfs::{BtrfsOps, LibBtrfsUtil};
@@ -35,11 +35,13 @@ pub fn run(
 ) -> Result<RunOutcome> {
     let run_id = runid::now();
     let filesystems = discover::discover()?;
-    let resolution = select::resolve(
-        &filesystems,
-        &profile.subvolumes,
-        &profile.exclude_subvolumes,
-    )?;
+    // A btrfs share that `repository_mount` mounts is where the backup goes, not
+    // something to back up (it matters for `subvolumes = "all"`).
+    let mut skip = profile.exclude_subvolumes.clone();
+    if let Some(m) = &profile.repository_mount {
+        skip.push(m.target.to_string_lossy().into_owned());
+    }
+    let resolution = select::resolve(&filesystems, &profile.subvolumes, &skip)?;
     let btrfs = LibBtrfsUtil;
 
     for w in &resolution.warnings {
@@ -114,7 +116,11 @@ pub fn run(
         .iter()
         .map(|e| {
             let read = std::fs::canonicalize(&e.path).unwrap_or_else(|_| e.path.clone());
-            excludes::translate(&profile.exclude, &e.path, &read, &[])
+            let skip: Vec<PathBuf> = repo_exclusion(profile, &e.path, &read)
+                .into_iter()
+                .collect();
+            let skip: Vec<&Path> = skip.iter().map(|p| p.as_path()).collect();
+            excludes::translate(&profile.exclude, &e.path, &read, &skip)
                 .with_context(|| format!("exclude patterns for {}", e.path.display()))
         })
         .collect::<Result<_>>()?;
@@ -125,92 +131,120 @@ pub fn run(
         staged.len()
     );
 
-    // --- consistency window ---
-    // Post-hooks always run, and termination signals are deferred until they have.
-    let burst_time = hooks::window(&profile.hooks, || {
-        snapshot::burst(&btrfs, &all_jobs).context("snapshot burst")?;
-        // The instant the data represents. `SnapshotFile::default()` stamps "now".
-        Ok(SnapshotFile::default().time)
-    })?;
-    println!("snapshotted {} subvolume(s)", all_jobs.len());
+    // Everything from the snapshot window to the merge. If any of it fails, this run's
+    // snapshots are of no use (nothing in the repository refers to them): remove them
+    // instead of leaving them for `rbtrfs gc`.
+    let upload = || -> Result<(Vec<SnapshotFile>, SnapshotFile)> {
+        // --- consistency window ---
+        // Post-hooks always run, and termination signals are deferred until they have.
+        let burst_time = hooks::window(&profile.hooks, || {
+            snapshot::burst(&btrfs, &all_jobs).context("snapshot burst")?;
+            // The instant the data represents. `SnapshotFile::default()` stamps "now".
+            Ok(SnapshotFile::default().time)
+        })?;
+        println!("snapshotted {} subvolume(s)", all_jobs.len());
 
-    // --- back up each read-only snapshot, recording the real mount point ---
-    let backup_part = |key: &str,
-                       read_path: &Path,
-                       record_path: &Path,
-                       globs: Vec<String>|
-     -> Result<SnapshotFile> {
-        // Re-open per part: the in-memory index must see the trees written so far.
-        let repo = handle
-            .open()?
-            .to_indexed_ids()
-            .context("indexing repository")?;
-        let mut snap = SnapshotOptions::default()
-            .label(format!("rbtrfs-part:{key}"))
-            .add_tags("rbtrfs:part")?
-            .add_tags(&format!("rbtrfs:run={run_id}"))?
-            .to_snapshot()?;
-        snap.hostname = crate::hostname();
-        snap.time = burst_time.clone();
+        // --- back up each read-only snapshot, recording the real mount point ---
+        let backup_part = |key: &str,
+                           read_path: &Path,
+                           record_path: &Path,
+                           globs: Vec<String>,
+                           one_file_system: bool|
+         -> Result<SnapshotFile> {
+            // Re-open per part: the in-memory index must see the trees written so far.
+            let repo = handle
+                .open()?
+                .to_indexed_ids()
+                .context("indexing repository")?;
+            let mut snap = SnapshotOptions::default()
+                .label(format!("rbtrfs-part:{key}"))
+                .add_tags("rbtrfs:part")?
+                .add_tags(&format!("rbtrfs:run={run_id}"))?
+                .to_snapshot()?;
+            snap.hostname = crate::hostname();
+            snap.time = burst_time.clone();
 
-        let opts = BackupOptions::default()
-            .as_path(record_path.to_path_buf())
-            // btrfs snapshots present files under a fresh subvolume: inode
-            // numbers are stable within a snapshot but the device is not.
-            .parent_opts(ParentOptions::default().ignore_inode(true))
-            .excludes(Excludes::default().globs(globs))
-            .ignore_filter_opts(
-                LocalSourceFilterOptions::default()
-                    .exclude_if_present(profile.exclude_if_present.clone())
-                    .exclude_if_xattr(profile.exclude_if_xattr.clone()),
-            );
-        let source = PathList::from_string(&read_path.to_string_lossy())?.sanitize()?;
-        let part = repo
-            .backup(&opts, &source, snap)
-            .with_context(|| format!("backing up {}", record_path.display()))?;
-        println!("  backed up {} ({})", record_path.display(), part.id);
-        Ok(part)
-    };
+            let opts = BackupOptions::default()
+                .as_path(record_path.to_path_buf())
+                // No parent_opts on purpose. rustic_core's `ignore_inode` works backwards
+                // (`true` makes it compare inodes); the default ignores them, which is what
+                // a fresh snapshot of the same files needs.
+                .excludes(Excludes::default().globs(globs))
+                .ignore_filter_opts(
+                    LocalSourceFilterOptions::default()
+                        .exclude_if_present(profile.exclude_if_present.clone())
+                        .exclude_if_xattr(profile.exclude_if_xattr.clone())
+                        .one_file_system(one_file_system),
+                );
+            let source = PathList::from_string(&read_path.to_string_lossy())?.sanitize()?;
+            let part = repo
+                .backup(&opts, &source, snap)
+                .with_context(|| format!("backing up {}", record_path.display()))?;
+            println!("  backed up {} ({})", record_path.display(), part.id);
+            Ok(part)
+        };
 
-    let mut parts = Vec::with_capacity(all_jobs.len() + extras.paths.len());
-    for (job, excl) in all_jobs.iter().zip(job_excludes) {
-        // Read from the SNAPSHOT (dest), never the live subvolume (src).
-        parts.push(backup_part(&job.key, &job.dest, &job.record_path, excl)?);
-    }
-    // Extra paths are not snapshotted: they are read live, after the snapshots.
-    for (extra, excl) in extras.paths.iter().zip(extra_excludes) {
-        parts.push(backup_part(&extra.key, &extra.path, &extra.path, excl)?);
-    }
-
-    // --- merge into one snapshot (re-open so the index sees the new trees) ---
-    let repo = handle.open()?.to_indexed().context("indexing for merge")?;
-    let merged_opts = {
-        let mut o = SnapshotOptions::default().label("rbtrfs".to_string());
-        for tag in &profile.tags {
-            o = o.add_tags(tag)?;
+        let mut parts = Vec::with_capacity(all_jobs.len() + extras.paths.len());
+        for (job, excl) in all_jobs.iter().zip(job_excludes) {
+            // Read from the SNAPSHOT (dest), never the live subvolume (src).
+            parts.push(backup_part(
+                &job.key,
+                &job.dest,
+                &job.record_path,
+                excl,
+                false,
+            )?);
         }
-        o.add_tags(&format!("rbtrfs:run={run_id}"))?
+        // Extra paths are not snapshotted: they are read live, after the snapshots.
+        // They stay on their own filesystem, like the dry run does.
+        for (extra, excl) in extras.paths.iter().zip(extra_excludes) {
+            parts.push(backup_part(
+                &extra.key,
+                &extra.path,
+                &extra.path,
+                excl,
+                true,
+            )?);
+        }
+
+        // --- merge into one snapshot (re-open so the index sees the new trees) ---
+        let repo = handle.open()?.to_indexed().context("indexing for merge")?;
+        let merged_opts = {
+            let mut o = SnapshotOptions::default().label("rbtrfs".to_string());
+            for tag in &profile.tags {
+                o = o.add_tags(tag)?;
+            }
+            o.add_tags(&format!("rbtrfs:run={run_id}"))?
+        };
+        let mut merged_snap = merged_opts.to_snapshot()?;
+        merged_snap.hostname = crate::hostname();
+        merged_snap.time = burst_time;
+        // Lineage for listings: point at this host's previous merged snapshot. (Only the
+        // parts drive incremental parent detection; this is informational.)
+        merged_snap.parent = repo
+            .get_all_snapshots()
+            .context("listing snapshots")?
+            .into_iter()
+            .filter(|s| {
+                s.label == "rbtrfs"
+                    && s.hostname == merged_snap.hostname
+                    && !s.tags.iter().any(|t| t == crate::restore::PART_TAG)
+            })
+            .max_by(|a, b| a.time.cmp(&b.time))
+            .map(|s| s.id);
+        let merged = repo
+            .merge_snapshots(&parts, &newest_wins, merged_snap)
+            .context("merging part snapshots")?;
+        println!("merged snapshot {} paths={:?}", merged.id, merged.paths);
+        Ok((parts, merged))
     };
-    let mut merged_snap = merged_opts.to_snapshot()?;
-    merged_snap.hostname = crate::hostname();
-    merged_snap.time = burst_time;
-    // Lineage for listings: point at this host's previous merged snapshot. (Only the
-    // parts drive incremental parent detection; this is informational.)
-    merged_snap.parent = repo
-        .get_all_snapshots()
-        .context("listing snapshots")?
-        .into_iter()
-        .filter(|s| {
-            s.label == "rbtrfs"
-                && s.hostname == merged_snap.hostname
-                && !s.tags.iter().any(|t| t == crate::restore::PART_TAG)
-        })
-        .max_by(|a, b| a.time.cmp(&b.time))
-        .map(|s| s.id);
-    let merged = repo
-        .merge_snapshots(&parts, &newest_wins, merged_snap)
-        .context("merging part snapshots")?;
-    println!("merged snapshot {} paths={:?}", merged.id, merged.paths);
+    let (parts, merged) = match upload() {
+        Ok(v) => v,
+        Err(e) => {
+            snapshot::discard(&btrfs, &all_jobs);
+            return Err(e);
+        }
+    };
 
     // --- GC local snapshot sets (this profile's subvolumes only) ---
     let mut report = GcReport::default();
@@ -245,6 +279,17 @@ pub fn run(
 
 /// Globs for one job: the profile's excludes re-rooted onto the snapshot, plus
 /// the staging dir that in-subvolume mode leaves inside the snapshot.
+/// Where a local repository sits below `record_root`, as a path below `read_root`.
+/// The repository must never be backed up into itself.
+fn repo_exclusion(profile: &Profile, record_root: &Path, read_root: &Path) -> Option<PathBuf> {
+    let repo = crate::repo::local_path(&profile.repository)?;
+    let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
+    let record_root = std::fs::canonicalize(record_root).unwrap_or(record_root.to_path_buf());
+    repo.strip_prefix(&record_root)
+        .ok()
+        .map(|rel| read_root.join(rel))
+}
+
 fn job_excludes(profile: &Profile, job: &SnapJob) -> Result<Vec<String>> {
     // Absolute globs are matched against the canonical path the walker reports.
     let root = std::fs::canonicalize(&job.dest).unwrap_or_else(|_| job.dest.clone());
@@ -252,7 +297,9 @@ fn job_excludes(profile: &Profile, job: &SnapJob) -> Result<Vec<String>> {
         let rel = p.strip_prefix(&job.dest).unwrap_or(p);
         root.join(rel)
     });
-    let extra: Vec<&Path> = staging.iter().map(|p| p.as_path()).collect();
+    let mut skip: Vec<PathBuf> = staging.into_iter().collect();
+    skip.extend(repo_exclusion(profile, &job.record_path, &root));
+    let extra: Vec<&Path> = skip.iter().map(|p| p.as_path()).collect();
     excludes::translate(&profile.exclude, &job.record_path, &root, &extra)
         .with_context(|| format!("exclude patterns for {}", job.record_path.display()))
 }
@@ -388,7 +435,8 @@ fn report_file_selection(
     for root in roots {
         let staging = (profile.staging == crate::config::Staging::InSubvolume)
             .then(|| root.join(&profile.staging_name));
-        let extra: Vec<&Path> = staging.iter().map(|p| p.as_path()).collect();
+        let repo = repo_exclusion(profile, &root, &root);
+        let extra: Vec<&Path> = staging.iter().chain(&repo).map(|p| p.as_path()).collect();
         let globs = match excludes::translate(&profile.exclude, &root, &root, &extra) {
             Ok(g) => g,
             Err(e) => {

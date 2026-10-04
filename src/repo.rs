@@ -92,10 +92,15 @@ impl RepoHandle {
 
     /// rustic_core does not create `locks/` on init; the `restic` CLI needs it.
     fn ensure_locks_dir(&self) {
-        let r = &self.repository;
-        let local = r.strip_prefix("local:").unwrap_or(r);
-        if !local.contains(':') {
-            let _ = std::fs::create_dir_all(std::path::Path::new(local).join("locks"));
+        if let Some(local) = local_path(&self.repository) {
+            let _ = std::fs::create_dir_all(local.join("locks"));
         }
     }
+}
+
+/// The directory a `repository` value names, if it is a plain local path (not a
+/// `rest:`, `rclone:` or `opendal:` URL).
+pub fn local_path(repository: &str) -> Option<std::path::PathBuf> {
+    let local = repository.strip_prefix("local:").unwrap_or(repository);
+    (!local.contains(':')).then(|| std::path::PathBuf::from(local))
 }
