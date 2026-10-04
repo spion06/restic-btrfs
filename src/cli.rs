@@ -37,7 +37,7 @@ impl Cli {
     pub fn profile(&self) -> Result<Option<crate::config::Profile>> {
         use Command::*;
         match &self.command {
-            Discover { .. } => Ok(None),
+            Discover { .. } | Completions { .. } | Man => Ok(None),
             Backup { profile, .. }
             | Snapshots { profile, .. }
             | Restore { profile, .. }
@@ -144,6 +144,13 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print a shell completion script to stdout.
+    Completions {
+        /// bash, zsh, fish, elvish or powershell.
+        shell: clap_complete::Shell,
+    },
+    /// Print the man page (roff) to stdout.
+    Man,
     /// Delete local btrfs snapshots left by past (or crashed) runs.
     Gc {
         #[arg(long, default_value = "default")]
@@ -175,7 +182,7 @@ impl Command {
         match self {
             Command::Backup { dry_run, .. } => !dry_run || mounts_repo,
             Command::Gc { .. } => true,
-            Command::Discover { .. } => false,
+            Command::Discover { .. } | Command::Completions { .. } | Command::Man => false,
             _ => mounts_repo,
         }
     }
@@ -190,6 +197,17 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
 
     match &cli.command {
         Command::Discover { json } => discover_cmd(*json),
+        Command::Completions { shell } => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            let mut buf = Vec::new();
+            clap_complete::generate(*shell, &mut cmd, "rbtrfs", &mut buf);
+            write_stdout(&buf)
+        }
+        Command::Man => {
+            let mut buf = Vec::new();
+            clap_mangen::Man::new(<Cli as clap::CommandFactory>::command()).render(&mut buf)?;
+            write_stdout(&buf)
+        }
         Command::Backup { dry_run, .. } => {
             let p = loaded.clone().expect("profile loaded for this command");
             let outcome = backup::run(&p, *dry_run).context("backup run")?;
@@ -305,6 +323,15 @@ fn confirm_unsafe(
     let mut line = String::new();
     input.read_line(&mut line)?;
     Ok(line.trim() == "yes")
+}
+
+/// Write generated text to stdout; a closed pipe (`| head`) is not an error.
+fn write_stdout(buf: &[u8]) -> Result<()> {
+    use std::io::Write;
+    match std::io::stdout().write_all(buf) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        r => r.map_err(Into::into),
+    }
 }
 
 fn host_filter(host: &Option<String>, any_host: bool) -> crate::restore::HostFilter {
@@ -451,5 +478,53 @@ mod tests {
     #[test]
     fn the_prompt_explains_the_risk() {
         assert!(ask("no\n").1.contains("corrupted"));
+    }
+}
+
+#[cfg(test)]
+mod generated_docs {
+    use super::*;
+
+    #[test]
+    fn man_page_and_completions_render() {
+        let mut man = Vec::new();
+        clap_mangen::Man::new(<Cli as clap::CommandFactory>::command())
+            .render(&mut man)
+            .unwrap();
+        let man = String::from_utf8(man).unwrap();
+        assert!(
+            man.contains("rbtrfs") && man.contains("forget"),
+            "man page lists subcommands"
+        );
+
+        for shell in [
+            clap_complete::Shell::Bash,
+            clap_complete::Shell::Zsh,
+            clap_complete::Shell::Fish,
+        ] {
+            let mut out = Vec::new();
+            clap_complete::generate(
+                shell,
+                &mut <Cli as clap::CommandFactory>::command(),
+                "rbtrfs",
+                &mut out,
+            );
+            assert!(
+                String::from_utf8(out).unwrap().contains("restore"),
+                "{shell} completion"
+            );
+        }
+    }
+
+    #[test]
+    fn they_need_neither_config_nor_root() {
+        for c in [
+            Command::Man,
+            Command::Completions {
+                shell: clap_complete::Shell::Bash,
+            },
+        ] {
+            assert!(!c.needs_root(None) && !c.needs_namespace(None));
+        }
     }
 }

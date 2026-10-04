@@ -1,0 +1,70 @@
+name: release
+
+# Push a tag like v0.1.0 (matching `version` in Cargo.toml) to build and publish.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: x86_64-linux }
+          - { os: ubuntu-22.04-arm, name: aarch64-linux }
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config libclang-dev
+      - name: Tag must match the crate version
+        run: |
+          crate="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          test "v$crate" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != crate v$crate"; exit 1; }
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          pkg="rbtrfs-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p "$pkg/completions"
+          install -m755 target/release/rbtrfs "$pkg/"
+          strip "$pkg/rbtrfs"
+          ./target/release/rbtrfs man > "$pkg/rbtrfs.1"
+          for sh in bash zsh fish; do ./target/release/rbtrfs completions "$sh" > "$pkg/completions/rbtrfs.$sh"; done
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE examples/config.toml "$pkg/"
+          tar czf "$pkg.tar.gz" "$pkg"
+          sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: rbtrfs-*.tar.gz*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "Binaries link dynamically against libbtrfsutil (package btrfs-progs / libbtrfsutil1) and need glibc 2.35 or newer."

@@ -6,6 +6,7 @@ Issues and pull requests are welcome.
 
 ```
 cargo build
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
@@ -25,6 +26,13 @@ directly and need `mkfs.btrfs`, `losetup`, `setfattr`/`getfattr` and `restic`.
 - A bug fix should come with a test that fails without it.
 - Update the README, `docs/` and `CHANGELOG.md` when behaviour changes.
 - Prefer small commits with a message explaining the why.
+
+## Releasing
+
+Update `version` in `Cargo.toml` and move the `CHANGELOG.md` entries under the new
+version, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`).
+The release workflow runs CI, builds x86_64 and aarch64 Linux tarballs (binary, man
+page, completions, licences) and publishes them as a GitHub release.
 
 See [`docs/architecture.md`](docs/architecture.md) for how the pieces fit.
 

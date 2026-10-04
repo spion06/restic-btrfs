@@ -4,12 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  lint:
+    name: fmt, clippy, unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,24 +26,26 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: libbtrfsutil
-        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config clang
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --lib
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config libclang-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --lib
 
   e2e:
-    # Real btrfs on a loop device. The runner is root-capable, so the tests run
-    # directly instead of delegating to a container.
+    # Real btrfs on loop devices. As a normal user the tests re-run themselves in
+    # privileged containers (the same path developers use), so the runner only
+    # needs Docker: no restic or btrfs-progs install here.
+    name: end-to-end (containers)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: system packages
-        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config clang btrfs-progs restic attr
-      - run: cargo test --test e2e_loopback --no-run
-      - name: e2e (as root, serial)
-        run: |
-          sudo modprobe btrfs loop || true
-          BIN=$(ls -t target/debug/deps/e2e_loopback-* | grep -v '\.d$' | head -1)
-          sudo "$BIN" --test-threads=1
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libbtrfsutil-dev pkg-config libclang-dev
+      - name: Load kernel modules
+        run: sudo modprobe btrfs loop || true
+      - run: cargo test --locked --test e2e_loopback
+        env:
+          RBTRFS_E2E_REQUIRED: "1"

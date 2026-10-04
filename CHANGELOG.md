@@ -14,4 +14,6 @@ All notable changes are documented here. The format follows
 - Hooks that always run after the snapshot and survive SIGINT/SIGTERM.
 - `repository_mount` to mount an NFS/CIFS/etc. repository privately for a run.
 - `staging = "in-subvolume"` for hosts that cannot mount the top-level subvolume.
+- `man` and `completions <shell>` commands.
+- Release workflow: tagged builds for x86_64 and aarch64 Linux with man page and completions.
 - End-to-end test suite on loopback btrfs, run in containers when not root.

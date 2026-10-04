@@ -27,6 +27,8 @@ fn main() -> Result<()> {
 fn command_name(c: &Command) -> &'static str {
     match c {
         Command::Discover { .. } => "discover",
+        Command::Completions { .. } => "completions",
+        Command::Man => "man",
         Command::Backup { .. } => "backup",
         Command::Snapshots { .. } => "snapshots",
         Command::Restore { .. } => "restore",
