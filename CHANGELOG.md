@@ -3,6 +3,22 @@
 All notable changes are documented here. Entries from 0.1.1 on are generated from
 commit messages when a release is made; see [CONTRIBUTING.md](CONTRIBUTING.md#releasing).
 
+## 0.1.2 - 2026-10-04
+
+### Added
+
+- Add 'rbtrfs init' and an option to disable auto-creating the repository
+- Restore root metadata and numeric ids, exit 3 for vanished files, forget per profile
+- Optionally list directories left out by CACHEDIR.TAG and other markers
+
+### Documentation
+
+- Correct claims about signals, leftover snapshots, globs and extra paths
+
+### Fixed
+
+- Harden backup runs found in review
+
 ## 0.1.1 - 2026-10-04
 
 ### Added
