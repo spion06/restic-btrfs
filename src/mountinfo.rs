@@ -43,7 +43,11 @@ impl MountInfoEntry {
     pub fn btrfs_subvol(&self) -> Option<String> {
         let raw = self.super_opt("subvol")?;
         let s = unescape(raw).to_string_lossy().into_owned();
-        Some(if s.starts_with('/') { s } else { format!("/{s}") })
+        Some(if s.starts_with('/') {
+            s
+        } else {
+            format!("/{s}")
+        })
     }
 
     /// `subvolid=` from superblock options (btrfs).
@@ -129,7 +133,10 @@ mod tests {
     fn parses_btrfs_rows() {
         let e = parse(SAMPLE);
         assert_eq!(e.len(), 4);
-        let home = e.iter().find(|m| m.mount_point.as_path() == std::path::Path::new("/home")).unwrap();
+        let home = e
+            .iter()
+            .find(|m| m.mount_point.as_path() == std::path::Path::new("/home"))
+            .unwrap();
         assert_eq!(home.fs_type, "btrfs");
         assert_eq!(home.dev, "0:34");
         assert_eq!(home.btrfs_subvol().as_deref(), Some("/@home"));

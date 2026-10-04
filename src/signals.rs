@@ -27,7 +27,11 @@ pub struct Deferred {
 impl Deferred {
     pub fn install() -> Result<Self> {
         INTERRUPTED.store(false, Ordering::SeqCst);
-        let action = SigAction::new(SigHandler::Handler(on_signal), SaFlags::empty(), SigSet::empty());
+        let action = SigAction::new(
+            SigHandler::Handler(on_signal),
+            SaFlags::empty(),
+            SigSet::empty(),
+        );
         let mut previous = Vec::new();
         for sig in DEFERRED {
             // SAFETY: the handler only stores to an atomic, which is async-signal-safe.

@@ -218,8 +218,8 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        let cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("parsing config {}", path.display()))?;
+        let cfg: Config =
+            toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
         for (name, p) in &cfg.profile {
             p.validate().with_context(|| format!("profile [{name}]"))?;
         }
@@ -269,7 +269,9 @@ impl Profile {
             + self.password_file.is_some() as u8
             + self.password_command.is_some() as u8;
         if n != 1 {
-            bail!("exactly one of password / password_file / password_command must be set (got {n})");
+            bail!(
+                "exactly one of password / password_file / password_command must be set (got {n})"
+            );
         }
         if self.subvolumes.is_empty() {
             bail!("`subvolumes` must not be empty");
@@ -364,7 +366,11 @@ mod tests {
     #[test]
     fn repository_mount_validation() {
         with_mount("/run/rbtrfs/repo/restic/box", "").unwrap();
-        with_mount("/srv/x/restic", "target = \"/srv/x\"\noptions = \"vers=4.2\"").unwrap();
+        with_mount(
+            "/srv/x/restic",
+            "target = \"/srv/x\"\noptions = \"vers=4.2\"",
+        )
+        .unwrap();
         // repository outside the mount target, relative target, remote repo: all rejected
         assert!(with_mount("/elsewhere/repo", "").is_err());
         assert!(with_mount("/srv/x/r", "target = \"srv/x\"").is_err());
@@ -395,7 +401,10 @@ mod tests {
         assert_eq!(k.keep_last, Some(3));
         assert!(k.keep_within.is_some());
 
-        let bad = Retention { keep_within: Some("soon".into()), ..Default::default() };
+        let bad = Retention {
+            keep_within: Some("soon".into()),
+            ..Default::default()
+        };
         assert!(bad.to_keep_options().is_err());
         assert!(Retention::default().is_empty());
     }

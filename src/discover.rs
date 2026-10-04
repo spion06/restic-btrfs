@@ -26,7 +26,8 @@ pub struct BtrfsMount {
 impl BtrfsMount {
     /// Is this the whole top-level subvolume (not a bind mount of a directory in it)?
     pub fn is_top_level(&self) -> bool {
-        self.is_subvol_root() && (self.subvolid == Some(mountinfo_fs_tree_id()) || self.subvol == "/")
+        self.is_subvol_root()
+            && (self.subvolid == Some(mountinfo_fs_tree_id()) || self.subvol == "/")
     }
 
     /// Does this mount expose a whole subvolume, rather than a subdirectory of one
@@ -70,7 +71,9 @@ impl BtrfsFilesystem {
             .iter()
             .filter(|m| {
                 !roots.contains(&m.mount_point)
-                    && roots.iter().any(|r| is_strict_descendant(&m.mount_point, r))
+                    && roots
+                        .iter()
+                        .any(|r| is_strict_descendant(&m.mount_point, r))
             })
             .collect()
     }
@@ -101,11 +104,13 @@ pub fn discover() -> Result<Vec<BtrfsFilesystem>> {
 pub fn from_mountinfo(entries: &[MountInfoEntry]) -> Vec<BtrfsFilesystem> {
     let mut by_dev: BTreeMap<String, BtrfsFilesystem> = BTreeMap::new();
     for e in entries.iter().filter(|e| e.fs_type == "btrfs") {
-        let fs = by_dev.entry(e.dev.clone()).or_insert_with(|| BtrfsFilesystem {
-            dev: e.dev.clone(),
-            source: e.source.clone(),
-            mounts: Vec::new(),
-        });
+        let fs = by_dev
+            .entry(e.dev.clone())
+            .or_insert_with(|| BtrfsFilesystem {
+                dev: e.dev.clone(),
+                source: e.source.clone(),
+                mounts: Vec::new(),
+            });
         fs.mounts.push(BtrfsMount {
             mount_point: e.mount_point.clone(),
             root: e.root.clone(),
@@ -146,14 +151,20 @@ mod tests {
         assert_eq!(main.mounts.len(), 4);
         assert!(main.top_level_mount().is_none());
         let other = fs.iter().find(|f| f.dev == "0:55").unwrap();
-        assert_eq!(other.top_level_mount().unwrap().mount_point, PathBuf::from("/data"));
+        assert_eq!(
+            other.top_level_mount().unwrap().mount_point,
+            PathBuf::from("/data")
+        );
     }
 
     #[test]
     fn bind_mount_of_subdirectory_is_not_a_subvolume_root() {
         let fs = parse(SAMPLE);
         let other = fs.iter().find(|f| f.dev == "0:55").unwrap();
-        assert!(!other.mount_at(Path::new("/data-sub")).unwrap().is_subvol_root());
+        assert!(!other
+            .mount_at(Path::new("/data-sub"))
+            .unwrap()
+            .is_subvol_root());
         assert!(other.mount_at(Path::new("/data")).unwrap().is_subvol_root());
         let main = fs.iter().find(|f| f.dev == "0:34").unwrap();
         assert!(main.mounts.iter().all(|m| m.is_subvol_root()));

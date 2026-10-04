@@ -23,8 +23,8 @@ use rustic_core::{
 };
 
 fn main() -> Result<()> {
-    let repo_dir = std::env::var("RBTRFS_SPIKE_REPO")
-        .unwrap_or_else(|_| "/tmp/rbtrfs-compat-repo".into());
+    let repo_dir =
+        std::env::var("RBTRFS_SPIKE_REPO").unwrap_or_else(|_| "/tmp/rbtrfs-compat-repo".into());
     let _ = fs::remove_dir_all(&repo_dir);
     let tmp = tempfile::tempdir()?;
     let stage_home = tmp.path().join("home");
@@ -36,7 +36,9 @@ fn main() -> Result<()> {
 
     let repo_opts = RepositoryOptions::default();
     let credentials = Credentials::password("spikepw");
-    let backends = BackendOptions::default().repository(&repo_dir).to_backends()?;
+    let backends = BackendOptions::default()
+        .repository(&repo_dir)
+        .to_backends()?;
 
     Repository::new(&repo_opts, &backends)?.init(
         &credentials,
@@ -66,7 +68,9 @@ fn main() -> Result<()> {
     let merged = repo.merge_snapshots(
         &parts,
         &cmp,
-        SnapshotOptions::default().add_tags("rbtrfs:merged")?.to_snapshot()?,
+        SnapshotOptions::default()
+            .add_tags("rbtrfs:merged")?
+            .to_snapshot()?,
     )?;
     println!("merged: {} paths={:?}", merged.id, merged.paths);
 

@@ -78,11 +78,9 @@ pub fn resolve<'a>(
         .collect::<Result<Vec<_>>>()?;
 
     let matches = |m: &BtrfsMount| {
-        matchers
-            .iter()
-            .any(|(raw, pat)| {
-                m.mount_point.as_path() == Path::new(raw) || pat.matches_path(&m.mount_point)
-            })
+        matchers.iter().any(|(raw, pat)| {
+            m.mount_point.as_path() == Path::new(raw) || pat.matches_path(&m.mount_point)
+        })
     };
 
     let mut out = Vec::new();
@@ -129,13 +127,24 @@ pub fn resolve<'a>(
             .filter(|m| m.is_subvol_root())
             .map(|m| m.mount_point.clone())
             .collect();
-        out.push(FilesystemSelection { fs, selected, nested_unselected });
+        out.push(FilesystemSelection {
+            fs,
+            selected,
+            nested_unselected,
+        });
     }
     if total == 0 {
-        let detail = if warnings.is_empty() { String::new() } else { format!(" ({})", warnings.join("; ")) };
+        let detail = if warnings.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", warnings.join("; "))
+        };
         bail!("no mounted btrfs subvolume matched any of: {patterns:?}{detail}");
     }
-    Ok(Resolution { selections: out, warnings })
+    Ok(Resolution {
+        selections: out,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -164,7 +173,10 @@ mod tests {
     fn keys_do_not_collide() {
         assert_eq!(key_for(Path::new("/var/log")), "var-log");
         assert_eq!(key_for(Path::new("/var-log")), "var%2dlog");
-        assert_ne!(key_for(Path::new("/var/log")), key_for(Path::new("/var-log")));
+        assert_ne!(
+            key_for(Path::new("/var/log")),
+            key_for(Path::new("/var-log"))
+        );
         assert_eq!(key_for(Path::new("/")), "rootfs");
         assert_ne!(key_for(Path::new("/")), key_for(Path::new("/rootfs")));
         assert_ne!(key_for(Path::new("/a%2db")), key_for(Path::new("/a-b")));
@@ -174,19 +186,33 @@ mod tests {
     fn exact_and_glob_patterns() {
         let f = fss();
         let r = resolve(&f, &pats(&["/home", "/srv"])).unwrap();
-        let keys: Vec<_> = r.selections[0].selected.iter().map(|s| s.key.as_str()).collect();
+        let keys: Vec<_> = r.selections[0]
+            .selected
+            .iter()
+            .map(|s| s.key.as_str())
+            .collect();
         assert_eq!(keys, ["home", "srv"]);
         let r = resolve(&f, &pats(&["/home/*"])).unwrap();
-        assert_eq!(r.selections[0].selected[0].mount_point, PathBuf::from("/home/vm"));
+        assert_eq!(
+            r.selections[0].selected[0].mount_point,
+            PathBuf::from("/home/vm")
+        );
     }
 
     #[test]
     fn bind_mounts_are_skipped_with_a_warning() {
         let f = fss();
         let r = resolve(&f, &pats(&["/srv/data", "/srv"])).unwrap();
-        let mps: Vec<_> = r.selections[0].selected.iter().map(|s| s.mount_point.clone()).collect();
+        let mps: Vec<_> = r.selections[0]
+            .selected
+            .iter()
+            .map(|s| s.mount_point.clone())
+            .collect();
         assert_eq!(mps, [PathBuf::from("/srv")]);
-        assert!(r.warnings.iter().any(|w| w.contains("/srv/data") && w.contains("bind mount")));
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("/srv/data") && w.contains("bind mount")));
     }
 
     #[test]
@@ -194,7 +220,10 @@ mod tests {
         let f = fss();
         let r = resolve(&f, &pats(&["/home", "/mnt/home-again"])).unwrap();
         assert_eq!(r.selections[0].selected.len(), 1);
-        assert_eq!(r.selections[0].selected[0].mount_point, PathBuf::from("/home"));
+        assert_eq!(
+            r.selections[0].selected[0].mount_point,
+            PathBuf::from("/home")
+        );
         assert!(r.warnings.iter().any(|w| w.contains("/mnt/home-again")));
     }
 
@@ -202,7 +231,10 @@ mod tests {
     fn nested_mounted_subvolume_is_flagged() {
         let f = fss();
         let r = resolve(&f, &pats(&["/home"])).unwrap();
-        assert_eq!(r.selections[0].nested_unselected, [PathBuf::from("/home/vm")]);
+        assert_eq!(
+            r.selections[0].nested_unselected,
+            [PathBuf::from("/home/vm")]
+        );
     }
 
     #[test]

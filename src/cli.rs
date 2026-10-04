@@ -10,7 +10,11 @@ use crate::config::Config;
 use crate::{backup, discover, gc};
 
 #[derive(Parser, Debug)]
-#[command(name = "rbtrfs", version, about = "Consistent btrfs-snapshot backups into a restic repo")]
+#[command(
+    name = "rbtrfs",
+    version,
+    about = "Consistent btrfs-snapshot backups into a restic repo"
+)]
 pub struct Cli {
     /// Config file (default: $RBTRFS_CONFIG or /etc/rbtrfs/config.toml).
     #[arg(long, short, global = true)]
@@ -197,7 +201,12 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             }
             Ok(())
         }
-        Command::Gc { keep_local, keep_local_days, all_keys, .. } => {
+        Command::Gc {
+            keep_local,
+            keep_local_days,
+            all_keys,
+            ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
             let retention = crate::snapshot::LocalRetention::new(
                 keep_local.unwrap_or(p.keep_local),
@@ -219,20 +228,46 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::list(&p, *all)
         }
-        Command::Restore { snapshot, subvol, target, host, any_host, as_subvolume, .. } => {
+        Command::Restore {
+            snapshot,
+            subvol,
+            target,
+            host,
+            any_host,
+            as_subvolume,
+            ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
             let host = host_filter(host, *any_host);
             crate::restore::restore(&p, snapshot, subvol, target, &host, *as_subvolume)
         }
-        Command::Ls { snapshot, path, host, any_host, .. } => {
+        Command::Ls {
+            snapshot,
+            path,
+            host,
+            any_host,
+            ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::ls(&p, snapshot, path, &host_filter(host, *any_host))
         }
-        Command::Dump { snapshot, path, host, any_host, .. } => {
+        Command::Dump {
+            snapshot,
+            path,
+            host,
+            any_host,
+            ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
             crate::restore::dump(&p, snapshot, path, &host_filter(host, *any_host))
         }
-        Command::Forget { prune, instant_delete, allow_unsafe, dry_run, .. } => {
+        Command::Forget {
+            prune,
+            instant_delete,
+            allow_unsafe,
+            dry_run,
+            ..
+        } => {
             let p = loaded.clone().expect("profile loaded for this command");
             if *instant_delete && !*allow_unsafe && !*dry_run {
                 use std::io::IsTerminal;
@@ -261,7 +296,10 @@ another host, restic, rustic) uses this repository while it runs, the repository
 corrupted. Type `yes` to continue: ";
 
 /// Ask on a terminal whether to proceed; only an exact `yes` confirms.
-fn confirm_unsafe(input: &mut impl std::io::BufRead, out: &mut impl std::io::Write) -> Result<bool> {
+fn confirm_unsafe(
+    input: &mut impl std::io::BufRead,
+    out: &mut impl std::io::Write,
+) -> Result<bool> {
     out.write_all(UNSAFE_PROMPT.as_bytes())?;
     out.flush()?;
     let mut line = String::new();
@@ -296,8 +334,13 @@ fn discover_cmd(json: bool) -> Result<()> {
     for fs in &filesystems {
         println!("filesystem {} ({})", fs.source, fs.dev);
         match fs.top_level_mount() {
-            Some(m) => println!("  top-level subvolume mounted at {}", m.mount_point.display()),
-            None => println!("  top-level subvolume not mounted (backup will mount it transiently)"),
+            Some(m) => println!(
+                "  top-level subvolume mounted at {}",
+                m.mount_point.display()
+            ),
+            None => {
+                println!("  top-level subvolume not mounted (backup will mount it transiently)")
+            }
         }
         println!("  mounts:");
         for m in &fs.mounts {
@@ -305,7 +348,9 @@ fn discover_cmd(json: bool) -> Result<()> {
                 "    {:<28} subvol={} subvolid={}",
                 m.mount_point.display(),
                 m.subvol,
-                m.subvolid.map(|i| i.to_string()).unwrap_or_else(|| "?".into()),
+                m.subvolid
+                    .map(|i| i.to_string())
+                    .unwrap_or_else(|| "?".into()),
             );
         }
 
@@ -332,7 +377,11 @@ fn discover_cmd(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_json(filesystems: &[discover::BtrfsFilesystem], btrfs: &dyn crate::btrfs::BtrfsOps, root: bool) {
+fn print_json(
+    filesystems: &[discover::BtrfsFilesystem],
+    btrfs: &dyn crate::btrfs::BtrfsOps,
+    root: bool,
+) {
     use serde_json::{json, Value};
 
     let out: Vec<Value> = filesystems
@@ -374,7 +423,10 @@ fn print_json(filesystems: &[discover::BtrfsFilesystem], btrfs: &dyn crate::btrf
             v
         })
         .collect();
-    println!("{}", serde_json::to_string(&out).expect("json is serialisable"));
+    println!(
+        "{}",
+        serde_json::to_string(&out).expect("json is serialisable")
+    );
 }
 
 #[cfg(test)]

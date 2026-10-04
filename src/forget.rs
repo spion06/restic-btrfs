@@ -24,7 +24,9 @@ const MERGED_LABEL: &str = "rbtrfs";
 const RUN_TAG_PREFIX: &str = "rbtrfs:run=";
 
 fn run_of(s: &SnapshotFile) -> Option<String> {
-    s.tags.iter().find_map(|t| t.strip_prefix(RUN_TAG_PREFIX).map(str::to_string))
+    s.tags
+        .iter()
+        .find_map(|t| t.strip_prefix(RUN_TAG_PREFIX).map(str::to_string))
 }
 
 fn is_part(s: &SnapshotFile) -> bool {
@@ -117,7 +119,11 @@ pub fn run(profile: &Profile, prune: bool, instant_delete: bool, dry_run: bool) 
         return Ok(());
     }
 
-    let ids: Vec<SnapshotId> = plan.forget_merged.into_iter().chain(plan.forget_parts).collect();
+    let ids: Vec<SnapshotId> = plan
+        .forget_merged
+        .into_iter()
+        .chain(plan.forget_parts)
+        .collect();
     if !ids.is_empty() {
         repo.delete_snapshots(&ids).context("removing snapshots")?;
     }
@@ -155,18 +161,30 @@ mod tests {
         s.hostname = host.into();
         // unsaved snapshots all carry the zero id; make them distinguishable
         s.id = rustic_core::Id::random().into();
-        s.time = s.time.checked_sub(jiff::Span::new().hours(hours_ago)).unwrap();
+        s.time = s
+            .time
+            .checked_sub(jiff::Span::new().hours(hours_ago))
+            .unwrap();
         s
     }
 
     fn keep_last(n: u32) -> rustic_core::KeepOptions {
-        Retention { keep_last: Some(n), ..Default::default() }.to_keep_options().unwrap()
+        Retention {
+            keep_last: Some(n),
+            ..Default::default()
+        }
+        .to_keep_options()
+        .unwrap()
     }
 
     /// Three runs for host `h`: each a merged snapshot plus parts for `a` and `b`.
     fn three_runs(host: &str) -> Vec<SnapshotFile> {
         let mut v = Vec::new();
-        for (run, ago) in [("20260101T000000Z", 48), ("20260102T000000Z", 24), ("20260103T000000Z", 0)] {
+        for (run, ago) in [
+            ("20260101T000000Z", 48),
+            ("20260102T000000Z", 24),
+            ("20260103T000000Z", 0),
+        ] {
             v.push(snap(host, "rbtrfs", run, false, ago));
             v.push(snap(host, "rbtrfs-part:a", run, true, ago));
             v.push(snap(host, "rbtrfs-part:b", run, true, ago));
@@ -181,7 +199,10 @@ mod tests {
         assert_eq!((p.kept_merged, p.forget_merged.len()), (2, 1));
         assert_eq!((p.kept_parts, p.forget_parts.len()), (2, 4));
         // the forgotten merged snapshot is the oldest one
-        let oldest = snaps.iter().find(|s| run_of(s).as_deref() == Some("20260101T000000Z") && !is_part(s)).unwrap();
+        let oldest = snaps
+            .iter()
+            .find(|s| run_of(s).as_deref() == Some("20260101T000000Z") && !is_part(s))
+            .unwrap();
         assert_eq!(p.forget_merged, vec![oldest.id]);
     }
 
@@ -201,8 +222,14 @@ mod tests {
         snaps.push(snap("h", "my-own-restic-job", "x", false, 500));
         snaps.push(snap("h", "other", "x", true, 500));
         let p = plan(snaps.clone(), &keep_last(1)).unwrap();
-        let foreign: Vec<_> = snaps.iter().filter(|s| s.label == "my-own-restic-job" || s.label == "other").map(|s| s.id).collect();
-        assert!(foreign.iter().all(|id| !p.forget_merged.contains(id) && !p.forget_parts.contains(id)));
+        let foreign: Vec<_> = snaps
+            .iter()
+            .filter(|s| s.label == "my-own-restic-job" || s.label == "other")
+            .map(|s| s.id)
+            .collect();
+        assert!(foreign
+            .iter()
+            .all(|id| !p.forget_merged.contains(id) && !p.forget_parts.contains(id)));
     }
 
     #[test]
@@ -211,7 +238,10 @@ mod tests {
         // a 4th run died before its merge: its parts are the best parents
         snaps.push(snap("h", "rbtrfs-part:a", "20260104T000000Z", true, 0));
         let p = plan(snaps, &keep_last(5)).unwrap();
-        assert_eq!(p.kept_parts, 3, "newest run's two parts + the unmerged run's part");
+        assert_eq!(
+            p.kept_parts, 3,
+            "newest run's two parts + the unmerged run's part"
+        );
     }
 
     #[test]

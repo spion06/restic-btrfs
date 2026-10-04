@@ -76,7 +76,10 @@ fn main() -> Result<()> {
             )
             .context("mount tmpfs in private ns")?;
             fs::write(Path::new(marker).join("proof"), b"inside-ns")?;
-            println!("mounted tmpfs at {marker} inside private ns; we see {} mount(s)", count_tmpfs_at(marker));
+            println!(
+                "mounted tmpfs at {marker} inside private ns; we see {} mount(s)",
+                count_tmpfs_at(marker)
+            );
 
             // --- thread-inheritance check (the rustic_core thread-pool concern) ---
             let handles: Vec<_> = (0..4)
@@ -93,7 +96,10 @@ fn main() -> Result<()> {
                 let (i, ns, seen) = h.join().unwrap();
                 let ok = ns == ns_after && seen >= 1;
                 all_threads_ok &= ok;
-                println!("  thread {i}: ns={ns} sees {seen} mount(s)  {}", if ok { "OK" } else { "BAD" });
+                println!(
+                    "  thread {i}: ns={ns} sees {seen} mount(s)  {}",
+                    if ok { "OK" } else { "BAD" }
+                );
             }
 
             let witness_ok = nix::sys::wait::waitpid(child, None)

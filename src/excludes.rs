@@ -60,7 +60,10 @@ pub fn translate(
             } else {
                 body.to_string()
             };
-            out.push(format!("!{anchored_any}{}", if p.ends_with('/') { "/" } else { "" }));
+            out.push(format!(
+                "!{anchored_any}{}",
+                if p.ends_with('/') { "/" } else { "" }
+            ));
         }
     }
     for abs in extra_abs {
@@ -114,7 +117,11 @@ mod tests {
         assert!(excluded(g.clone(), &format!("{ROOT}/bob/x/.cache"), true));
         assert!(excluded(g.clone(), &format!("{ROOT}/bob/a.tmp"), false));
         assert!(excluded(g.clone(), &format!("{ROOT}/p/node_modules"), true));
-        assert!(!excluded(g.clone(), &format!("{ROOT}/p/node_modules"), false));
+        assert!(!excluded(
+            g.clone(),
+            &format!("{ROOT}/p/node_modules"),
+            false
+        ));
         assert!(!excluded(g.clone(), &format!("{ROOT}/bob/keep.txt"), false));
         assert!(!excluded(g, &format!("{ROOT}/bob/.config"), true));
     }
@@ -122,7 +129,11 @@ mod tests {
     #[test]
     fn absolute_patterns_are_rerooted_onto_the_snapshot() {
         let g = t(&["/home/alice/Downloads", "/home/*/tmp"]);
-        assert!(excluded(g.clone(), &format!("{ROOT}/alice/Downloads"), true));
+        assert!(excluded(
+            g.clone(),
+            &format!("{ROOT}/alice/Downloads"),
+            true
+        ));
         assert!(excluded(g.clone(), &format!("{ROOT}/bob/tmp"), true));
         assert!(!excluded(g.clone(), &format!("{ROOT}/bob/Downloads"), true));
         assert!(!excluded(g, &format!("{ROOT}/alice/Documents"), true));
@@ -131,20 +142,38 @@ mod tests {
     #[test]
     fn absolute_patterns_for_other_subvolumes_are_ignored() {
         assert!(t(&["/srv/data"]).is_empty());
-        let root = translate(&pats(&["/home/alice"]), Path::new("/"), Path::new(ROOT), &[]).unwrap();
+        let root = translate(
+            &pats(&["/home/alice"]),
+            Path::new("/"),
+            Path::new(ROOT),
+            &[],
+        )
+        .unwrap();
         assert!(excluded(root, &format!("{ROOT}/home/alice"), true));
     }
 
     #[test]
     fn snapshot_path_metacharacters_are_escaped() {
-        let g = translate(&pats(&["/home/x"]), Path::new("/home"), Path::new("/s/we[ir]d*"), &[]).unwrap();
+        let g = translate(
+            &pats(&["/home/x"]),
+            Path::new("/home"),
+            Path::new("/s/we[ir]d*"),
+            &[],
+        )
+        .unwrap();
         assert!(excluded(g.clone(), "/s/we[ir]d*/x", false));
         assert!(!excluded(g, "/s/weid/x", false));
     }
 
     #[test]
     fn extra_absolute_excludes_are_literal() {
-        let g = translate(&[], Path::new("/home"), Path::new(ROOT), &[Path::new(&format!("{ROOT}/.rbtrfs-snapshots"))]).unwrap();
+        let g = translate(
+            &[],
+            Path::new("/home"),
+            Path::new(ROOT),
+            &[Path::new(&format!("{ROOT}/.rbtrfs-snapshots"))],
+        )
+        .unwrap();
         assert!(excluded(g, &format!("{ROOT}/.rbtrfs-snapshots"), true));
     }
 

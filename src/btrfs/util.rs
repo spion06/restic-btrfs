@@ -27,8 +27,8 @@ impl BtrfsOps for LibBtrfsUtil {
             .with_context(|| format!("iterate subvolumes under {}", path.display()))?;
         let mut out = Vec::new();
         for entry in iter {
-            let (rel_path, info) =
-                entry.with_context(|| format!("reading subvolume entry under {}", path.display()))?;
+            let (rel_path, info) = entry
+                .with_context(|| format!("reading subvolume entry under {}", path.display()))?;
             out.push(Subvolume {
                 id: info.id(),
                 parent_id: info.parent_id().map(|n| n.get()),

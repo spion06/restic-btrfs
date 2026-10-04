@@ -32,7 +32,10 @@ impl StagingArea {
                 let target = crate::ns::mount_target(&fs.dev);
                 let mount = TransientMount::top_level(&fs.source, &target)?;
                 let root = mount.path().join(&profile.staging_name);
-                Ok(Self { gc_roots: vec![root], top: Some(mount) })
+                Ok(Self {
+                    gc_roots: vec![root],
+                    top: Some(mount),
+                })
             }
             Staging::InSubvolume => Ok(Self {
                 gc_roots: selected
@@ -59,7 +62,11 @@ impl StagingArea {
                     staging_in_snapshot: None,
                 },
                 None => {
-                    let dest = s.mount_point.join(&profile.staging_name).join(&s.key).join(run_id);
+                    let dest = s
+                        .mount_point
+                        .join(&profile.staging_name)
+                        .join(&s.key)
+                        .join(run_id);
                     SnapJob {
                         key: s.key.clone(),
                         record_path: s.mount_point.clone(),
@@ -128,11 +135,16 @@ pub struct LocalRetention {
 
 impl LocalRetention {
     pub fn new(keep: usize, keep_days: Option<u64>) -> Self {
-        Self { keep, keep_days, now: runid::now_unix() }
+        Self {
+            keep,
+            keep_days,
+            now: runid::now_unix(),
+        }
     }
 
     fn young(&self, run_secs: u64) -> bool {
-        self.keep_days.is_some_and(|d| self.now.saturating_sub(run_secs) < d.saturating_mul(86_400))
+        self.keep_days
+            .is_some_and(|d| self.now.saturating_sub(run_secs) < d.saturating_mul(86_400))
     }
 }
 
@@ -217,7 +229,10 @@ impl GcReport {
     /// Print skipped/failed entries as warnings.
     pub fn warn(&self) {
         for p in &self.skipped {
-            eprintln!("rbtrfs: warning: gc: {} is not a subvolume; left alone", p.display());
+            eprintln!(
+                "rbtrfs: warning: gc: {} is not a subvolume; left alone",
+                p.display()
+            );
         }
         for (p, e) in &self.failed {
             eprintln!("rbtrfs: warning: gc: could not delete {}: {e}", p.display());
@@ -276,7 +291,11 @@ mod tests {
 
     /// Retention evaluated "now" = 2026-01-03T12:00:00Z.
     fn keep(n: usize) -> LocalRetention {
-        LocalRetention { keep: n, keep_days: None, now: runid::to_unix("20260103T120000Z").unwrap() }
+        LocalRetention {
+            keep: n,
+            keep_days: None,
+            now: runid::to_unix("20260103T120000Z").unwrap(),
+        }
     }
 
     const R1: &str = "20260101T000000Z";
@@ -300,14 +319,21 @@ mod tests {
         let t = staging(&[("home", &[R1, R2, R3])]);
         let fake = Fake::default();
         // now = Jan 3 12:00; R3 is 12h old, R2 1.5d, R1 2.5d. keep 1 + younger than 2 days
-        let ret = LocalRetention { keep_days: Some(2), ..keep(1) };
+        let ret = LocalRetention {
+            keep_days: Some(2),
+            ..keep(1)
+        };
         let r = gc(&fake, t.path(), None, &ret).unwrap();
         assert_eq!(r.deleted, vec![t.path().join("home").join(R1)]);
     }
 
     #[test]
     fn only_touches_owned_keys_and_run_ids() {
-        let t = staging(&[("home", &[R1, R2]), ("other", &[R1, R2]), ("home", &["snapper-1"])]);
+        let t = staging(&[
+            ("home", &[R1, R2]),
+            ("other", &[R1, R2]),
+            ("home", &["snapper-1"]),
+        ]);
         let fake = Fake::default();
         let r = gc(&fake, t.path(), Some(&["home".to_string()]), &keep(1)).unwrap();
         assert_eq!(r.deleted, vec![t.path().join("home").join(R1)]);
@@ -355,6 +381,9 @@ mod tests {
         std::fs::create_dir_all(t.path().join("c").join(R1)).unwrap();
         let fake = Fake::default();
         assert!(burst(&fake, &[job("a"), job("c")]).is_err());
-        assert!(fake.snapshots.borrow().is_empty(), "nothing snapshotted if any dest is bad");
+        assert!(
+            fake.snapshots.borrow().is_empty(),
+            "nothing snapshotted if any dest is bad"
+        );
     }
 }

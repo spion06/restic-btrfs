@@ -35,7 +35,9 @@ pub struct TransientMount {
 /// Mount target for the top-level subvolume of the filesystem identified by
 /// mountinfo `dev` (`major:minor`), under rbtrfs' runtime dir.
 pub fn mount_target(dev: &str) -> std::path::PathBuf {
-    crate::lock::run_dir().join("mnt").join(dev.replace(':', "_"))
+    crate::lock::run_dir()
+        .join("mnt")
+        .join(dev.replace(':', "_"))
 }
 
 impl TransientMount {
@@ -52,7 +54,9 @@ impl TransientMount {
             Some("subvolid=5"),
         )
         .with_context(|| format!("mount {source} subvolid=5 at {}", target.display()))?;
-        Ok(Self { target: target.to_path_buf() })
+        Ok(Self {
+            target: target.to_path_buf(),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -88,7 +92,9 @@ impl RepositoryMount {
             cmd.arg("-o").arg(o);
         }
         cmd.arg(&spec.source).arg(&spec.target);
-        let out = cmd.output().context("running mount(8) (is util-linux installed?)")?;
+        let out = cmd
+            .output()
+            .context("running mount(8) (is util-linux installed?)")?;
         if !out.status.success() {
             anyhow::bail!(
                 "mounting {} ({}) at {} failed: {}",
@@ -98,7 +104,9 @@ impl RepositoryMount {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        Ok(Self { target: spec.target.clone() })
+        Ok(Self {
+            target: spec.target.clone(),
+        })
     }
 }
 

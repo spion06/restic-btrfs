@@ -46,10 +46,7 @@ fn main() -> Result<()> {
 
     // --- per-subvolume backups with as_path remap ---
     let mut parts = Vec::new();
-    for (stage, as_path, key) in [
-        (&stage_home, "/home", "home"),
-        (&stage_srv, "/srv", "srv"),
-    ] {
+    for (stage, as_path, key) in [(&stage_home, "/home", "home"), (&stage_srv, "/srv", "srv")] {
         let snap = SnapshotOptions::default()
             .add_tags(&format!("rbtrfs:part,rbtrfs:subvol={key}"))?
             .to_snapshot()?;
@@ -67,14 +64,15 @@ fn main() -> Result<()> {
         .open(&credentials)?
         .to_indexed()?;
 
-    let newest_wins = |a: &Node, b: &Node| -> Ordering {
-        a.meta.mtime.cmp(&b.meta.mtime)
-    };
+    let newest_wins = |a: &Node, b: &Node| -> Ordering { a.meta.mtime.cmp(&b.meta.mtime) };
     let merged_snap = SnapshotOptions::default()
         .add_tags("rbtrfs:merged")?
         .to_snapshot()?;
     let merged = repo.merge_snapshots(&parts, &newest_wins, merged_snap)?;
-    println!("\nmerged: id={} tree={} paths={:?}", merged.id, merged.tree, merged.paths);
+    println!(
+        "\nmerged: id={} tree={} paths={:?}",
+        merged.id, merged.tree, merged.paths
+    );
 
     // --- inspect merged tree (re-open fresh so the new tree is in the index) ---
     drop(repo);
@@ -100,7 +98,11 @@ fn main() -> Result<()> {
     println!("\n=== RESULT ===");
     println!("home file present at real path: {saw_home}");
     println!("srv  file present at real path: {saw_srv}");
-    println!("repo dir for manual `restic -r {} check`: {}", repo_dir.display(), repo_dir.display());
+    println!(
+        "repo dir for manual `restic -r {} check`: {}",
+        repo_dir.display(),
+        repo_dir.display()
+    );
     // keep the repo around for the restic cross-check
     let keep = std::env::temp_dir().join("rbtrfs-spike-repo");
     let _ = fs::remove_dir_all(&keep);

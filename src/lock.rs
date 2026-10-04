@@ -40,7 +40,10 @@ pub fn acquire() -> Result<RunLock> {
     match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
         Ok(flock) => Ok(RunLock { _flock: flock }),
         Err((_, Errno::EWOULDBLOCK)) => {
-            bail!("another rbtrfs run is in progress (lock held: {})", path.display())
+            bail!(
+                "another rbtrfs run is in progress (lock held: {})",
+                path.display()
+            )
         }
         Err((_, e)) => Err(e).with_context(|| format!("locking {}", path.display())),
     }

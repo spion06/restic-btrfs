@@ -18,15 +18,12 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-
 mod container {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use testcontainers::core::{
-        wait::ExitWaitStrategy, ImageExt, Mount, WaitFor,
-    };
+    use testcontainers::core::{wait::ExitWaitStrategy, ImageExt, Mount, WaitFor};
     use testcontainers::runners::{SyncBuilder, SyncRunner};
     use testcontainers::{GenericBuildableImage, GenericImage};
 
@@ -58,7 +55,10 @@ mod container {
 
     /// Deepest directory containing both paths.
     fn common_dir(a: &Path, b: &Path) -> PathBuf {
-        a.ancestors().find(|d| b.starts_with(d)).unwrap_or(Path::new("/")).to_path_buf()
+        a.ancestors()
+            .find(|d| b.starts_with(d))
+            .unwrap_or(Path::new("/"))
+            .to_path_buf()
     }
 
     /// Run test `name` of this test binary as root inside a privileged container.
@@ -69,7 +69,11 @@ mod container {
             return false;
         }
         // "e2e_loopback::excludes_exclude::f" -> "excludes_exclude"
-        let name = type_name.trim_end_matches("::f").rsplit("::").next().unwrap();
+        let name = type_name
+            .trim_end_matches("::f")
+            .rsplit("::")
+            .next()
+            .unwrap();
 
         let exe = std::env::current_exe().unwrap();
         let bin = PathBuf::from(env!("CARGO_BIN_EXE_rbtrfs"));
@@ -93,19 +97,29 @@ mod container {
             // loop devices are created on demand by the host kernel; a bind-mounted
             // /dev is the only way their nodes show up inside the container
             .with_mount(Mount::bind_mount("/dev", "/dev"))
-            .with_mount(Mount::bind_mount(root.to_string_lossy(), root.to_string_lossy()))
+            .with_mount(Mount::bind_mount(
+                root.to_string_lossy(),
+                root.to_string_lossy(),
+            ))
             // scratch images live in RAM: fast, and gone with the container
             .with_mount(Mount::tmpfs_mount("/tmp"))
             .with_env_var("RUST_BACKTRACE", "1")
             .with_startup_timeout(Duration::from_secs(900))
-            .with_cmd([exe.to_string_lossy().into_owned(), "--exact".into(), name.into(), "--nocapture".into()])
+            .with_cmd([
+                exe.to_string_lossy().into_owned(),
+                "--exact".into(),
+                name.into(),
+                "--nocapture".into(),
+            ])
             .start()
             .unwrap_or_else(|e| panic!("starting container for {name}: {e}"));
 
         let code = container.exit_code().unwrap();
         if code != Some(0) {
-            let out = String::from_utf8_lossy(&container.stdout_to_vec().unwrap_or_default()).into_owned();
-            let err = String::from_utf8_lossy(&container.stderr_to_vec().unwrap_or_default()).into_owned();
+            let out = String::from_utf8_lossy(&container.stdout_to_vec().unwrap_or_default())
+                .into_owned();
+            let err = String::from_utf8_lossy(&container.stderr_to_vec().unwrap_or_default())
+                .into_owned();
             panic!("{name} failed in container (exit {code:?})\n--- stdout ---\n{out}\n--- stderr ---\n{err}");
         }
         true
@@ -160,7 +174,10 @@ struct LoopFs {
 
 impl LoopFs {
     fn new(tag: &str) -> Self {
-        assert!(container::is_root(), "e2e fixtures need root (e2e!() delegates to a container)");
+        assert!(
+            container::is_root(),
+            "e2e fixtures need root (e2e!() delegates to a container)"
+        );
         let serial = serial();
         let base = std::env::temp_dir().join(format!("rbtrfs-it-{tag}"));
         Self::teardown(&base);
@@ -168,11 +185,17 @@ impl LoopFs {
         let img = base.join("fs.img");
         sh(&format!("truncate -s 512M {}", img.display()));
         sh(&format!("mkfs.btrfs -qf {}", img.display()));
-        let dev = sh(&format!("losetup --find --show {}", img.display())).trim().to_string();
+        let dev = sh(&format!("losetup --find --show {}", img.display()))
+            .trim()
+            .to_string();
         let mnt = base.join("mnt");
         fs::create_dir_all(&mnt).unwrap();
         sh(&format!("mount {dev} {}", mnt.display()));
-        Self { base, dev, _serial: serial }
+        Self {
+            base,
+            dev,
+            _serial: serial,
+        }
     }
 
     /// Best-effort removal of everything under `base`, also from aborted runs.
@@ -212,10 +235,17 @@ impl Fx {
         let fs = LoopFs::new(tag);
         let mut mounts = Vec::new();
         for (i, name) in subvols.iter().enumerate() {
-            sh(&format!("btrfs subvolume create {}/mnt/'{name}'", fs.base.display()));
+            sh(&format!(
+                "btrfs subvolume create {}/mnt/'{name}'",
+                fs.base.display()
+            ));
             let mp = fs.base.join(format!("s{i}"));
             fs::create_dir_all(&mp).unwrap();
-            sh(&format!("mount -o subvol='{name}' {} {}", fs.dev, mp.display()));
+            sh(&format!(
+                "mount -o subvol='{name}' {} {}",
+                fs.dev,
+                mp.display()
+            ));
             mounts.push(mp);
         }
         let cfg = fs.base.join("config.toml");
@@ -267,7 +297,11 @@ impl Fx {
 
     fn ok(&self, args: &[&str]) -> String {
         let out = self.run(args);
-        assert!(out.status.success(), "rbtrfs {args:?} failed:\n{}", text(&out));
+        assert!(
+            out.status.success(),
+            "rbtrfs {args:?} failed:\n{}",
+            text(&out)
+        );
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
@@ -299,7 +333,11 @@ impl Fx {
             .args(args)
             .output()
             .expect("restic binary");
-        assert!(out.status.success(), "restic {args:?} failed:\n{}", text(&out));
+        assert!(
+            out.status.success(),
+            "restic {args:?} failed:\n{}",
+            text(&out)
+        );
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
@@ -323,7 +361,11 @@ fn kill(sig: &str, pid: u32) {
 
 fn list_dir(p: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(p)
-        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
         .unwrap_or_default();
     v.sort();
     v
@@ -332,8 +374,18 @@ fn list_dir(p: &Path) -> Vec<String> {
 /// Everything about a tree that a faithful backup must preserve.
 #[derive(Debug, PartialEq, Eq)]
 enum Entry {
-    File { content: Vec<u8>, mode: u32, uid: u32, gid: u32, mtime: i64 },
-    Dir { mode: u32, uid: u32, gid: u32 },
+    File {
+        content: Vec<u8>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        mtime: i64,
+    },
+    Dir {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     Symlink(PathBuf),
 }
 
@@ -349,7 +401,11 @@ fn walk(root: &Path) -> BTreeMap<String, Entry> {
                 Entry::Symlink(fs::read_link(&p).unwrap())
             } else if md.is_dir() {
                 stack.push(p);
-                Entry::Dir { mode: md.mode() & 0o7777, uid: md.uid(), gid: md.gid() }
+                Entry::Dir {
+                    mode: md.mode() & 0o7777,
+                    uid: md.uid(),
+                    gid: md.gid(),
+                }
             } else {
                 Entry::File {
                     content: fs::read(&p).unwrap(),
@@ -397,10 +453,19 @@ fn roundtrip_metadata_gc_and_cross_tool_check() {
 
     // metadata that must survive: mode, ownership, mtime, symlink, xattr
     fs::write(a.join("private.txt"), b"secret").unwrap();
-    sh(&format!("chmod 640 '{0}/private.txt' && chown 1234:5678 '{0}/private.txt'", a.display()));
-    sh(&format!("touch -d @1700000000 '{}/private.txt'", a.display()));
+    sh(&format!(
+        "chmod 640 '{0}/private.txt' && chown 1234:5678 '{0}/private.txt'",
+        a.display()
+    ));
+    sh(&format!(
+        "touch -d @1700000000 '{}/private.txt'",
+        a.display()
+    ));
     symlink("sub/hello.txt", a.join("link")).unwrap();
-    sh(&format!("setfattr -n user.rbtrfs -v marker '{}/sub/hello.txt'", a.display()));
+    sh(&format!(
+        "setfattr -n user.rbtrfs -v marker '{}/sub/hello.txt'",
+        a.display()
+    ));
 
     let before = (walk(a), walk(b), walk(c));
     let mounts_before = host_mounts();
@@ -412,16 +477,30 @@ fn roundtrip_metadata_gc_and_cross_tool_check() {
     fx.ok(&["backup"]);
     fx.ok(&["backup"]); // second run: parent detection + GC
 
-    assert_eq!(mounts_before, host_mounts(), "host mount table changed (namespace leak)");
+    assert_eq!(
+        mounts_before,
+        host_mounts(),
+        "host mount table changed (namespace leak)"
+    );
     // keep_local defaults to 1: exactly one local snapshot set per subvolume remains
     for mp in &fx.mounts {
-        assert_eq!(fx.local_runs(mp).len(), 1, "local sets for {}", mp.display());
+        assert_eq!(
+            fx.local_runs(mp).len(),
+            1,
+            "local sets for {}",
+            mp.display()
+        );
     }
 
     for (i, mp) in fx.mounts.iter().enumerate() {
         let restored = fx.restore("latest", mp, &format!("restore-{i}"));
         let want = [&before.0, &before.1, &before.2][i];
-        assert_eq!(want, &walk(&restored), "subvolume {} did not round-trip", mp.display());
+        assert_eq!(
+            want,
+            &walk(&restored),
+            "subvolume {} did not round-trip",
+            mp.display()
+        );
     }
     let xattr = sh(&format!(
         "getfattr -n user.rbtrfs --only-values '{}/restore-0/sub/hello.txt'",
@@ -453,10 +532,17 @@ fn backup_reads_the_snapshot_not_the_live_subvolume() {
     );
     fx.ok(&["backup"]);
 
-    assert_eq!(fs::read_to_string(a.join("f.txt")).unwrap().trim(), "CHANGED", "hook ran");
+    assert_eq!(
+        fs::read_to_string(a.join("f.txt")).unwrap().trim(),
+        "CHANGED",
+        "hook ran"
+    );
     let restored = fx.restore("latest", a, "restored");
     assert_eq!(fs::read(restored.join("f.txt")).unwrap(), b"ORIGINAL");
-    assert!(!restored.join("new.txt").exists(), "post-snapshot file leaked into the backup");
+    assert!(
+        !restored.join("new.txt").exists(),
+        "post-snapshot file leaked into the backup"
+    );
 }
 
 #[test]
@@ -464,12 +550,26 @@ fn excludes_exclude() {
     e2e!();
     let fx = Fx::new("excludes", &["@a"]);
     let a = &fx.mounts[0];
-    for d in [".cache", "u/.cache", "Downloads", "sub", "keepdir/node_modules"] {
+    for d in [
+        ".cache",
+        "u/.cache",
+        "Downloads",
+        "sub",
+        "keepdir/node_modules",
+    ] {
         fs::create_dir_all(a.join(d)).unwrap();
     }
     for f in [
-        "keep.txt", "skip.tmp", ".cache/x", "u/.cache/y", "u/keep.txt", "Downloads/z", "sub/keep2",
-        "sub/deep.tmp", "keepdir/node_modules/m", "keepdir/k",
+        "keep.txt",
+        "skip.tmp",
+        ".cache/x",
+        "u/.cache/y",
+        "u/keep.txt",
+        "Downloads/z",
+        "sub/keep2",
+        "sub/deep.tmp",
+        "keepdir/node_modules/m",
+        "keepdir/k",
     ] {
         fs::write(a.join(f), f.as_bytes()).unwrap();
     }
@@ -495,17 +595,31 @@ fn second_run_is_incremental() {
     fx.ok(&["backup"]);
     fx.ok(&["backup"]);
 
-    let snaps: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+    let snaps: serde_json::Value =
+        serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
     let mut parts: Vec<&serde_json::Value> = snaps
         .as_array()
         .unwrap()
         .iter()
-        .filter(|s| s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part"))
+        .filter(|s| {
+            s["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t == "rbtrfs:part")
+        })
         .collect();
     parts.sort_by_key(|s| s["time"].as_str().unwrap().to_string());
     assert_eq!(parts.len(), 2);
-    assert!(parts[1]["parent"].is_string(), "second part has a parent: {}", parts[1]);
-    assert_eq!(parts[1]["parent"], parts[0]["id"], "chained to the previous run's part");
+    assert!(
+        parts[1]["parent"].is_string(),
+        "second part has a parent: {}",
+        parts[1]
+    );
+    assert_eq!(
+        parts[1]["parent"], parts[0]["id"],
+        "chained to the previous run's part"
+    );
     let added = parts[1]["summary"]["data_added"].as_u64().unwrap();
     assert_eq!(added, 0, "unchanged data was re-read/re-added");
 
@@ -514,12 +628,24 @@ fn second_run_is_incremental() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|s| !s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part"))
+        .filter(|s| {
+            !s["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t == "rbtrfs:part")
+        })
         .collect();
     merged.sort_by_key(|s| s["time"].as_str().unwrap().to_string());
     assert_eq!(merged.len(), 2);
-    assert!(merged[0]["parent"].is_null(), "first merged snapshot has no parent");
-    assert_eq!(merged[1]["parent"], merged[0]["id"], "merged snapshots are chained");
+    assert!(
+        merged[0]["parent"].is_null(),
+        "first merged snapshot has no parent"
+    );
+    assert_eq!(
+        merged[1]["parent"], merged[0]["id"],
+        "merged snapshots are chained"
+    );
 }
 
 #[test]
@@ -535,8 +661,15 @@ fn failing_pre_hook_still_runs_post_hooks() {
         ),
     );
     let out = fx.run(&["backup"]);
-    assert!(!out.status.success(), "backup must fail when a pre-hook fails");
-    assert!(marker.exists(), "post-hook must run after a failed pre-hook:\n{}", text(&out));
+    assert!(
+        !out.status.success(),
+        "backup must fail when a pre-hook fails"
+    );
+    assert!(
+        marker.exists(),
+        "post-hook must run after a failed pre-hook:\n{}",
+        text(&out)
+    );
     assert!(fx.local_runs(&fx.mounts[0]).is_empty(), "no snapshot taken");
 }
 
@@ -549,23 +682,40 @@ fn nested_selected_subvolumes_merge_with_content_at_both_paths() {
     sh(&format!("umount {}", inner_src.display()));
     let inner = outer.join("inner");
     fs::create_dir_all(&inner).unwrap();
-    sh(&format!("mount -o subvol=@inner {} {}", fx.fs.dev, inner.display()));
+    sh(&format!(
+        "mount -o subvol=@inner {} {}",
+        fx.fs.dev,
+        inner.display()
+    ));
     fs::write(outer.join("o.txt"), b"outer").unwrap();
     fs::write(inner.join("i.txt"), b"inner").unwrap();
 
     fx.write_cfg(&[outer.clone(), inner.clone()], "");
     let out = fx.run(&["backup"]);
     assert!(out.status.success(), "{}", text(&out));
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("nested under a selected"), "no nested warning when both selected");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("nested under a selected"),
+        "no nested warning when both selected"
+    );
 
     let restored = files(&fx.restore("latest", outer, "restored"));
-    assert_eq!(restored.get("o.txt").map(|v| v.as_slice()), Some(&b"outer"[..]));
-    assert_eq!(restored.get("inner/i.txt").map(|v| v.as_slice()), Some(&b"inner"[..]));
+    assert_eq!(
+        restored.get("o.txt").map(|v| v.as_slice()),
+        Some(&b"outer"[..])
+    );
+    assert_eq!(
+        restored.get("inner/i.txt").map(|v| v.as_slice()),
+        Some(&b"inner"[..])
+    );
 
     // selecting only the outer one must warn that the inner one will be empty
     fx.write_cfg(std::slice::from_ref(outer), "");
     let out = fx.run(&["backup", "--dry-run"]);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("nested under a selected"), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("nested under a selected"),
+        "{}",
+        text(&out)
+    );
 }
 
 #[test]
@@ -589,7 +739,10 @@ fn in_subvolume_staging_backs_up_snapshots_and_excludes_staging_dir() {
     // snapshot isolation holds in this mode too (run 2 saw CHANGED as its baseline,
     // then the hook changed it again after the burst)
     let restored = fx.restore("latest", a, "restored-a");
-    assert_eq!(fs::read_to_string(restored.join("f.txt")).unwrap().trim(), "CHANGED");
+    assert_eq!(
+        fs::read_to_string(restored.join("f.txt")).unwrap().trim(),
+        "CHANGED"
+    );
     assert!(
         !restored.join(".rbtrfs-snapshots").exists(),
         "staging dir leaked into the backup: {:?}",
@@ -602,7 +755,12 @@ fn in_subvolume_staging_backs_up_snapshots_and_excludes_staging_dir() {
     for mp in &fx.mounts {
         let key = rbtrfs::select::key_for(mp);
         let runs = list_dir(&mp.join(".rbtrfs-snapshots").join(key));
-        assert_eq!(runs.len(), 1, "in-subvolume GC left {runs:?} for {}", mp.display());
+        assert_eq!(
+            runs.len(),
+            1,
+            "in-subvolume GC left {runs:?} for {}",
+            mp.display()
+        );
     }
     fx.restic_check();
 }
@@ -651,15 +809,23 @@ fn wrong_password_is_an_error_not_a_reinit() {
     let config_before = fs::read(fx.repo().join("config")).unwrap();
     let keys_before = list_dir(&fx.repo().join("keys"));
 
-    let cfg = fs::read_to_string(&fx.cfg).unwrap().replace("password = \"pw\"", "password = \"nope\"");
+    let cfg = fs::read_to_string(&fx.cfg)
+        .unwrap()
+        .replace("password = \"pw\"", "password = \"nope\"");
     fs::write(&fx.cfg, cfg).unwrap();
     let out = fx.run(&["backup"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!err.contains("initializing repository"), "must not try to init: {err}");
+    assert!(
+        !err.contains("initializing repository"),
+        "must not try to init: {err}"
+    );
     assert_eq!(config_before, fs::read(fx.repo().join("config")).unwrap());
     assert_eq!(keys_before, list_dir(&fx.repo().join("keys")));
-    assert!(fx.local_runs(&fx.mounts[0]).len() <= 1, "no extra snapshot taken before failing");
+    assert!(
+        fx.local_runs(&fx.mounts[0]).len() <= 1,
+        "no extra snapshot taken before failing"
+    );
 }
 
 #[test]
@@ -673,11 +839,38 @@ fn latest_ignores_other_hosts_unless_asked() {
     fx.restic(&["rewrite", "--forget", "--new-host", "other-machine"]);
 
     let target = fx.base().join("r1");
-    let out = fx.run(&["restore", "latest", "--subvol", &a.to_string_lossy(), "--target", &target.to_string_lossy()]);
-    assert!(!out.status.success(), "latest must not pick another host's snapshot");
+    let out = fx.run(&[
+        "restore",
+        "latest",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &target.to_string_lossy(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "latest must not pick another host's snapshot"
+    );
 
-    fx.ok(&["restore", "latest", "--any-host", "--subvol", &a.to_string_lossy(), "--target", &fx.base().join("r2").to_string_lossy()]);
-    fx.ok(&["restore", "latest", "--host", "other-machine", "--subvol", &a.to_string_lossy(), "--target", &fx.base().join("r3").to_string_lossy()]);
+    fx.ok(&[
+        "restore",
+        "latest",
+        "--any-host",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &fx.base().join("r2").to_string_lossy(),
+    ]);
+    fx.ok(&[
+        "restore",
+        "latest",
+        "--host",
+        "other-machine",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &fx.base().join("r3").to_string_lossy(),
+    ]);
     assert_eq!(fs::read(fx.base().join("r3/f")).unwrap(), b"x");
 }
 
@@ -689,13 +882,23 @@ fn unmounted_nested_subvolume_is_warned_about() {
     // a nested subvolume that is not mounted anywhere (docker, machinectl, ...)
     sh(&format!("btrfs subvolume create '{}/vm'", outer.display()));
     // a read-only nested snapshot (snapper style) must NOT warn
-    sh(&format!("btrfs subvolume snapshot -r '{0}' '{0}/.snap'", outer.display()));
+    sh(&format!(
+        "btrfs subvolume snapshot -r '{0}' '{0}/.snap'",
+        outer.display()
+    ));
 
     let out = fx.run(&["backup", "--dry-run"]);
     assert!(out.status.success(), "{}", text(&out));
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("subvolume /@outer/vm is nested under a selected"), "{}", text(&out));
-    assert!(!err.contains(".snap"), "read-only snapshots are not warned about:\n{err}");
+    assert!(
+        err.contains("subvolume /@outer/vm is nested under a selected"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        !err.contains(".snap"),
+        "read-only snapshots are not warned about:\n{err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -712,13 +915,28 @@ fn ls_and_dump_read_a_snapshot() {
     fx.ok(&["backup"]);
 
     let all = fx.ok(&["ls", "latest"]);
-    for want in [format!("{}/sub/hello.txt", a.display()), format!("{}/other", b.display())] {
-        assert!(all.lines().any(|l| l.ends_with(&want)), "ls / lacks {want}:\n{all}");
+    for want in [
+        format!("{}/sub/hello.txt", a.display()),
+        format!("{}/other", b.display()),
+    ] {
+        assert!(
+            all.lines().any(|l| l.ends_with(&want)),
+            "ls / lacks {want}:\n{all}"
+        );
     }
     let sub = fx.ok(&["ls", "latest", &a.to_string_lossy()]);
-    assert!(sub.contains(&format!("{}/sub/hello.txt", a.display())), "{sub}");
-    assert!(!sub.contains(&b.to_string_lossy().to_string()), "ls <path> is scoped:\n{sub}");
-    let line = sub.lines().find(|l| l.ends_with("/sub")).expect("sub dir listed");
+    assert!(
+        sub.contains(&format!("{}/sub/hello.txt", a.display())),
+        "{sub}"
+    );
+    assert!(
+        !sub.contains(&b.to_string_lossy().to_string()),
+        "ls <path> is scoped:\n{sub}"
+    );
+    let line = sub
+        .lines()
+        .find(|l| l.ends_with("/sub"))
+        .expect("sub dir listed");
     assert!(line.starts_with('d'), "{line}");
 
     let dumped = Command::new(env!("CARGO_BIN_EXE_rbtrfs"))
@@ -744,16 +962,40 @@ fn restore_as_subvolume_creates_a_real_subvolume() {
 
     // the top level of the test filesystem is mounted at <base>/mnt (btrfs)
     let target = fx.base().join("mnt/restored-sv");
-    fx.ok(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &target.to_string_lossy()]);
+    fx.ok(&[
+        "restore",
+        "latest",
+        "--as-subvolume",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &target.to_string_lossy(),
+    ]);
     sh(&format!("btrfs subvolume show '{}'", target.display())); // fails if not a subvolume
     assert_eq!(fs::read(target.join("sub/f.txt")).unwrap(), b"payload");
 
     // refuses to overwrite, and a non-btrfs target fails without leaving anything
-    let again = fx.run(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &target.to_string_lossy()]);
+    let again = fx.run(&[
+        "restore",
+        "latest",
+        "--as-subvolume",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &target.to_string_lossy(),
+    ]);
     assert!(!again.status.success());
     let plain = std::env::temp_dir().join("rbtrfs-it-assubvol-not-btrfs");
     let _ = fs::remove_dir_all(&plain);
-    let out = fx.run(&["restore", "latest", "--as-subvolume", "--subvol", &a.to_string_lossy(), "--target", &plain.to_string_lossy()]);
+    let out = fx.run(&[
+        "restore",
+        "latest",
+        "--as-subvolume",
+        "--subvol",
+        &a.to_string_lossy(),
+        "--target",
+        &plain.to_string_lossy(),
+    ]);
     assert!(!out.status.success(), "{}", text(&out));
     assert!(!plain.exists(), "no leftover after a failed --as-subvolume");
 }
@@ -772,9 +1014,19 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
         std::thread::sleep(Duration::from_millis(1100)); // run ids have 1s resolution
     }
     let count = |fx: &Fx, part: bool| -> usize {
-        let v: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
-        v.as_array().unwrap().iter()
-            .filter(|s| s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part") == part)
+        let v: serde_json::Value =
+            serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| {
+                s["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t == "rbtrfs:part")
+                    == part
+            })
             .count()
     };
     assert_eq!((count(&fx, false), count(&fx, true)), (3, 3));
@@ -782,9 +1034,16 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
     // no policy configured: refuse
     let out = fx.run(&["forget"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("retention"), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("retention"),
+        "{}",
+        text(&out)
+    );
 
-    fx.write_cfg(&fx.mounts.clone(), "keep_local = 1\n[profile.default.retention]\nkeep_last = 1\n");
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        "keep_local = 1\n[profile.default.retention]\nkeep_last = 1\n",
+    );
     // dry run changes nothing
     let dry = fx.ok(&["forget", "--dry-run"]);
     assert!(dry.contains("forget 2"), "{dry}");
@@ -793,15 +1052,26 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
     // default prune: rustic only *marks* unneeded packs (a rustic-specific index
     // field) and deletes them on a later prune; official restic must still accept it
     fx.ok(&["forget", "--prune"]);
-    assert_eq!((count(&fx, false), count(&fx, true)), (1, 1), "newest merged + its parts");
+    assert_eq!(
+        (count(&fx, false), count(&fx, true)),
+        (1, 1),
+        "newest merged + its parts"
+    );
     fx.restic_check();
     fx.restic(&["snapshots"]);
     let restored = fx.restore("latest", a, "restored-marked");
     assert_eq!(files(&restored).len(), 3);
     // and instant delete really frees them
     let refused = fx.run(&["forget", "--prune", "--instant-delete"]);
-    assert!(!refused.status.success(), "--instant-delete must require --allow-unsafe");
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("--allow-unsafe"), "{}", text(&refused));
+    assert!(
+        !refused.status.success(),
+        "--instant-delete must require --allow-unsafe"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--allow-unsafe"),
+        "{}",
+        text(&refused)
+    );
     fx.ok(&["forget", "--prune", "--instant-delete", "--allow-unsafe"]);
     fx.restic_check();
 
@@ -811,11 +1081,23 @@ fn forget_applies_retention_and_prunes_without_breaking_the_repo() {
     std::thread::sleep(Duration::from_millis(1100));
     fx.ok(&["backup"]);
     let v: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
-    let newest_part = v.as_array().unwrap().iter()
-        .filter(|s| s["tags"].as_array().unwrap().iter().any(|t| t == "rbtrfs:part"))
+    let newest_part = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            s["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t == "rbtrfs:part")
+        })
         .max_by_key(|s| s["time"].as_str().unwrap().to_string())
         .unwrap();
-    assert!(newest_part["parent"].is_string(), "incremental chain survived forget");
+    assert!(
+        newest_part["parent"].is_string(),
+        "incremental chain survived forget"
+    );
     fx.restic_check();
 }
 
@@ -846,32 +1128,66 @@ fn termination_signals_wait_for_post_hooks() {
     e2e!();
     let fx = Fx::new("signals", &["@a"]);
     let a = &fx.mounts[0];
-    let spawn = |fx: &Fx| fx.cmd(&["backup"]).stderr(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+    let spawn = |fx: &Fx| {
+        fx.cmd(&["backup"])
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    };
 
     // (1) SIGTERM during a slow pre-hook: no snapshot, but the post-hook still runs
     let marker1 = fx.base().join("post-ran-1");
-    fx.write_cfg(&fx.mounts.clone(), &format!(
-        "[profile.default.hooks]\npre = [\"sleep 3\"]\npost = [\"touch '{}'\"]\n", marker1.display()));
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        &format!(
+            "[profile.default.hooks]\npre = [\"sleep 3\"]\npost = [\"touch '{}'\"]\n",
+            marker1.display()
+        ),
+    );
     let child = spawn(&fx);
     std::thread::sleep(Duration::from_millis(1200));
     kill("TERM", child.id());
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("interrupted"), "{}", text(&out));
-    assert!(marker1.exists(), "post-hook must run although we were signalled");
-    assert!(fx.local_runs(a).is_empty(), "no snapshot after an interrupt before the burst");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("interrupted"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        marker1.exists(),
+        "post-hook must run although we were signalled"
+    );
+    assert!(
+        fx.local_runs(a).is_empty(),
+        "no snapshot after an interrupt before the burst"
+    );
 
     // (2) SIGTERM during a slow post-hook: every post-hook still runs
     let marker2 = fx.base().join("post-ran-2");
-    fx.write_cfg(&fx.mounts.clone(), &format!(
-        "[profile.default.hooks]\npost = [\"sleep 3\", \"touch '{}'\"]\n", marker2.display()));
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        &format!(
+            "[profile.default.hooks]\npost = [\"sleep 3\", \"touch '{}'\"]\n",
+            marker2.display()
+        ),
+    );
     let child = spawn(&fx);
     wait_until(20, "the snapshot", || !fx.local_runs(a).is_empty());
     kill("TERM", child.id());
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
-    assert!(marker2.exists(), "later post-hooks must still run:\n{}", text(&out));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("after snapshot"), "{}", text(&out));
+    assert!(
+        marker2.exists(),
+        "later post-hooks must still run:\n{}",
+        text(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("after snapshot"),
+        "{}",
+        text(&out)
+    );
 }
 
 #[test]
@@ -880,16 +1196,32 @@ fn sigkill_mid_run_leaks_no_mounts_and_gc_reclaims_the_snapshots() {
     let fx = Fx::new("sigkill", &["@a"]);
     let a = &fx.mounts[0];
     // a slow post-hook keeps the run alive after the burst
-    fx.write_cfg(&fx.mounts.clone(), "[profile.default.hooks]\npost = [\"sleep 3\"]\n");
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        "[profile.default.hooks]\npost = [\"sleep 3\"]\n",
+    );
     let mounts_before = host_mounts();
 
-    let mut child = fx.cmd(&["backup"]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let mut child = fx
+        .cmd(&["backup"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     wait_until(20, "the snapshot", || !fx.local_runs(a).is_empty());
     child.kill().unwrap(); // SIGKILL
     child.wait().unwrap();
 
-    assert_eq!(mounts_before, host_mounts(), "SIGKILL leaked a mount into the host namespace");
-    assert_eq!(fx.local_runs(a).len(), 1, "the orphaned snapshot persists on disk");
+    assert_eq!(
+        mounts_before,
+        host_mounts(),
+        "SIGKILL leaked a mount into the host namespace"
+    );
+    assert_eq!(
+        fx.local_runs(a).len(),
+        1,
+        "the orphaned snapshot persists on disk"
+    );
     // the orphaned hook keeps the (private) namespace alive for its remaining
     // seconds; let it finish so teardown can unmount cleanly
     std::thread::sleep(Duration::from_millis(3500));
@@ -902,24 +1234,38 @@ fn sigkill_mid_run_leaks_no_mounts_and_gc_reclaims_the_snapshots() {
 
 /// A file whose content proves its own integrity: `<len>:<fnv64>\n<body>`.
 fn fnv(data: &[u8]) -> u64 {
-    data.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
+    data.iter().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ *b as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 fn write_valid(path: &Path, seed: u64) {
-    let body: Vec<u8> = (0..300_000u64).map(|i| (i.wrapping_mul(seed | 1) >> 3) as u8).collect();
+    let body: Vec<u8> = (0..300_000u64)
+        .map(|i| (i.wrapping_mul(seed | 1) >> 3) as u8)
+        .collect();
     let mut content = format!("{}:{:016x}\n", body.len(), fnv(&body)).into_bytes();
     content.extend_from_slice(&body);
-    let tmp = path.with_file_name(format!(".{}.tmp", path.file_name().unwrap().to_string_lossy()));
+    let tmp = path.with_file_name(format!(
+        ".{}.tmp",
+        path.file_name().unwrap().to_string_lossy()
+    ));
     fs::write(&tmp, content).unwrap();
     fs::rename(&tmp, path).unwrap(); // readers (and snapshots) see old or new, never half
 }
 
 fn is_valid(bytes: &[u8]) -> bool {
-    let Some(nl) = bytes.iter().position(|b| *b == b'\n') else { return false };
-    let Ok(header) = std::str::from_utf8(&bytes[..nl]) else { return false };
-    let Some((len, sum)) = header.split_once(':') else { return false };
+    let Some(nl) = bytes.iter().position(|b| *b == b'\n') else {
+        return false;
+    };
+    let Ok(header) = std::str::from_utf8(&bytes[..nl]) else {
+        return false;
+    };
+    let Some((len, sum)) = header.split_once(':') else {
+        return false;
+    };
     let body = &bytes[nl + 1..];
-    len.parse::<usize>().ok() == Some(body.len()) && u64::from_str_radix(sum, 16).ok() == Some(fnv(body))
+    len.parse::<usize>().ok() == Some(body.len())
+        && u64::from_str_radix(sum, 16).ok() == Some(fnv(body))
 }
 
 #[test]
@@ -959,7 +1305,10 @@ fn files_are_individually_intact_while_writers_churn_two_subvolumes() {
     }
     stop.store(true, Ordering::Relaxed);
     writer.join().unwrap();
-    assert!(rounds.load(Ordering::Relaxed) > 3, "the writer must actually have raced the backups");
+    assert!(
+        rounds.load(Ordering::Relaxed) > 3,
+        "the writer must actually have raced the backups"
+    );
 
     // Per-file integrity is what btrfs snapshots guarantee. Which *generation* of
     // each file lands in each subvolume is NOT asserted: the two snapshots are
@@ -967,10 +1316,17 @@ fn files_are_individually_intact_while_writers_churn_two_subvolumes() {
     // captured part-written and are ignored; final names must be whole.
     for (i, d) in dirs.iter().enumerate() {
         let restored = files(&fx.restore("latest", d, &format!("restored-{i}")));
-        let finals: Vec<_> = restored.iter().filter(|(k, _)| !k.starts_with('.')).collect();
+        let finals: Vec<_> = restored
+            .iter()
+            .filter(|(k, _)| !k.starts_with('.'))
+            .collect();
         assert_eq!(finals.len(), 8, "every file present in {}", d.display());
         for (name, bytes) in finals {
-            assert!(is_valid(bytes), "{name} in {} is torn or corrupt", d.display());
+            assert!(
+                is_valid(bytes),
+                "{name} in {} is torn or corrupt",
+                d.display()
+            );
         }
     }
     fx.restic_check();
@@ -979,7 +1335,10 @@ fn files_are_individually_intact_while_writers_churn_two_subvolumes() {
 /// What an *external* rustic user does: forget all but the newest run, then prune
 /// with default (two-phase, delayed-deletion) options, in a loop. It uses the
 /// library directly, so it does NOT take rbtrfs' run lock.
-fn external_rustic_forget_and_prune(repo: PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> std::thread::JoinHandle<(u32, Vec<String>)> {
+fn external_rustic_forget_and_prune(
+    repo: PathBuf,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<(u32, Vec<String>)> {
     use rustic_core::{ConfigOptions, Credentials, PruneOptions, Repository, RepositoryOptions};
     std::thread::spawn(move || {
         let backends = rustic_backend::BackendOptions::default()
@@ -987,9 +1346,12 @@ fn external_rustic_forget_and_prune(repo: PathBuf, stop: std::sync::Arc<std::syn
             .to_backends()
             .unwrap();
         let creds = Credentials::password("pw");
-        let keep = rbtrfs::config::Retention { keep_last: Some(1), ..Default::default() }
-            .to_keep_options()
-            .unwrap();
+        let keep = rbtrfs::config::Retention {
+            keep_last: Some(1),
+            ..Default::default()
+        }
+        .to_keep_options()
+        .unwrap();
         let _ = ConfigOptions::default();
         let (mut rounds, mut errors) = (0, Vec::new());
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1000,7 +1362,11 @@ fn external_rustic_forget_and_prune(repo: PathBuf, stop: std::sync::Arc<std::syn
                     .map_err(|e| e.to_string())?;
                 let snaps = repo.get_all_snapshots().map_err(|e| e.to_string())?;
                 let plan = rbtrfs::forget::plan(snaps, &keep).map_err(|e| format!("{e:#}"))?;
-                let ids: Vec<_> = plan.forget_merged.into_iter().chain(plan.forget_parts).collect();
+                let ids: Vec<_> = plan
+                    .forget_merged
+                    .into_iter()
+                    .chain(plan.forget_parts)
+                    .collect();
                 if !ids.is_empty() {
                     repo.delete_snapshots(&ids).map_err(|e| e.to_string())?;
                 }
@@ -1044,16 +1410,25 @@ fn external_rustic_forget_and_prune_during_backups_does_not_corrupt() {
     }
     stop.store(true, Ordering::Relaxed);
     let (rounds, errors) = pruner.join().unwrap();
-    eprintln!("external pruner: {rounds} successful rounds, {} errors: {errors:#?}", errors.len());
+    eprintln!(
+        "external pruner: {rounds} successful rounds, {} errors: {errors:#?}",
+        errors.len()
+    );
     assert!(rounds >= 3, "the pruner must really have raced the backups");
 
     // The repository is intact for official restic, and the newest backup restores.
     fx.restic_check();
     for (i, d) in dirs.iter().enumerate() {
         let restored = files(&fx.restore("latest", d, &format!("restored-{i}")));
-        let finals: Vec<_> = restored.iter().filter(|(k, _)| !k.starts_with('.')).collect();
+        let finals: Vec<_> = restored
+            .iter()
+            .filter(|(k, _)| !k.starts_with('.'))
+            .collect();
         assert_eq!(finals.len(), 6);
-        assert!(finals.iter().all(|(_, b)| is_valid(b)), "restored data corrupt after concurrent prune");
+        assert!(
+            finals.iter().all(|(_, b)| is_valid(b)),
+            "restored data corrupt after concurrent prune"
+        );
     }
 }
 
@@ -1079,12 +1454,22 @@ fn official_restic_backups_during_rustic_prune_stay_intact() {
     }
     stop.store(true, Ordering::Relaxed);
     let (rounds, errors) = pruner.join().unwrap();
-    eprintln!("rustic pruner: {rounds} rounds, {} errors: {errors:#?}", errors.len());
+    eprintln!(
+        "rustic pruner: {rounds} rounds, {} errors: {errors:#?}",
+        errors.len()
+    );
     assert!(rounds >= 3);
 
     fx.restic_check();
     let out = fx.base().join("restic-restore");
-    fx.restic(&["restore", "latest", "--target", &out.to_string_lossy(), "--path", &data.to_string_lossy()]);
+    fx.restic(&[
+        "restore",
+        "latest",
+        "--target",
+        &out.to_string_lossy(),
+        "--path",
+        &data.to_string_lossy(),
+    ]);
 }
 
 #[test]
@@ -1097,8 +1482,13 @@ fn repository_can_live_on_a_privately_mounted_filesystem() {
     fs::write(a.join("f.txt"), b"on the remote repo").unwrap();
 
     let img = fx.base().join("repo.img");
-    sh(&format!("truncate -s 256M '{0}' && mkfs.btrfs -qf '{0}'", img.display()));
-    let dev = sh(&format!("losetup --find --show '{}'", img.display())).trim().to_string();
+    sh(&format!(
+        "truncate -s 256M '{0}' && mkfs.btrfs -qf '{0}'",
+        img.display()
+    ));
+    let dev = sh(&format!("losetup --find --show '{}'", img.display()))
+        .trim()
+        .to_string();
     let target = fx.base().join("repo-mnt");
     let cfg = |source: &str| {
         format!(
@@ -1116,7 +1506,11 @@ fn repository_can_live_on_a_privately_mounted_filesystem() {
     fs::write(&fx.cfg, cfg("/dev/does-not-exist")).unwrap();
     let bad = fx.run(&["backup"]);
     assert!(!bad.status.success());
-    assert!(String::from_utf8_lossy(&bad.stderr).contains("mounting"), "{}", text(&bad));
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("mounting"),
+        "{}",
+        text(&bad)
+    );
     assert!(fx.local_runs(a).is_empty());
 
     fs::write(&fx.cfg, cfg(&dev)).unwrap();
@@ -1125,14 +1519,24 @@ fn repository_can_live_on_a_privately_mounted_filesystem() {
     assert!(fx.ok(&["snapshots"]).contains("merged"));
     assert!(fx.ok(&["ls", "latest"]).contains("f.txt"));
     let restored = fx.restore("latest", a, "restored");
-    assert_eq!(fs::read(restored.join("f.txt")).unwrap(), b"on the remote repo");
+    assert_eq!(
+        fs::read(restored.join("f.txt")).unwrap(),
+        b"on the remote repo"
+    );
     fx.ok(&["backup"]);
     fx.write_cfg_keep_repo_mount(&cfg(&dev), "[profile.default.retention]\nkeep_last = 1\n");
     fx.ok(&["forget"]);
 
     // the mount was private: the host never saw it, and left nothing behind
-    assert_eq!(mounts_before, host_mounts(), "repository mount leaked into the host namespace");
-    assert!(!target.join("restic").exists(), "repository must not exist on the host side");
+    assert_eq!(
+        mounts_before,
+        host_mounts(),
+        "repository mount leaked into the host namespace"
+    );
+    assert!(
+        !target.join("restic").exists(),
+        "repository must not exist on the host side"
+    );
 
     // ...yet the repository really is on that device, and official restic reads it
     let peek = fx.base().join("peek");

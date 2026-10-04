@@ -18,7 +18,9 @@ pub fn window<T>(hooks: &Hooks, body: impl FnOnce() -> Result<T>) -> Result<T> {
 
     let pre = run_pre(hooks).context("pre-hooks");
     let result = match pre {
-        Ok(()) if guard.interrupted() => Err(anyhow::anyhow!("interrupted by signal before snapshot")),
+        Ok(()) if guard.interrupted() => {
+            Err(anyhow::anyhow!("interrupted by signal before snapshot"))
+        }
         Ok(()) => body(),
         Err(e) => Err(e),
     };
@@ -32,7 +34,9 @@ pub fn window<T>(hooks: &Hooks, body: impl FnOnce() -> Result<T>) -> Result<T> {
         (Ok(v), Ok(())) => Ok(v),
         (Err(e), Ok(())) => Err(e),
         (Ok(_), Err(e)) => Err(e),
-        (Err(e), Err(post_err)) => Err(e.context(format!("(post-hooks also failed: {post_err:#})"))),
+        (Err(e), Err(post_err)) => {
+            Err(e.context(format!("(post-hooks also failed: {post_err:#})")))
+        }
     }
 }
 
@@ -61,7 +65,9 @@ fn run_all(kind: &str, cmds: &[String], on_failure: HookFailure) -> Result<()> {
         match (run_one(kind, cmd), on_failure) {
             (Ok(()), _) => {}
             (Err(e), HookFailure::Abort) => return Err(e),
-            (Err(e), HookFailure::Warn) => eprintln!("rbtrfs: {kind}-hook failed (continuing): {e:#}"),
+            (Err(e), HookFailure::Warn) => {
+                eprintln!("rbtrfs: {kind}-hook failed (continuing): {e:#}")
+            }
         }
     }
     Ok(())

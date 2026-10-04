@@ -101,7 +101,10 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     let mut parts = Vec::with_capacity(all_jobs.len());
     for (job, excl) in all_jobs.iter().zip(job_excludes) {
         // Re-open per part: the in-memory index must see the trees written so far.
-        let repo = handle.open()?.to_indexed_ids().context("indexing repository")?;
+        let repo = handle
+            .open()?
+            .to_indexed_ids()
+            .context("indexing repository")?;
         let mut snap = SnapshotOptions::default()
             .label(format!("rbtrfs-part:{}", job.key))
             .add_tags("rbtrfs:part")?
@@ -161,7 +164,12 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         let keys: Vec<String> = jobs.iter().map(|j| j.key.clone()).collect();
         debug_assert_eq!(jobs.len(), sel.selected.len());
         for root in area.gc_roots() {
-            match snapshot::gc(&btrfs, root, Some(&keys), &LocalRetention::new(profile.keep_local, profile.keep_local_days)) {
+            match snapshot::gc(
+                &btrfs,
+                root,
+                Some(&keys),
+                &LocalRetention::new(profile.keep_local, profile.keep_local_days),
+            ) {
                 Ok(r) => report.merge(r),
                 Err(e) => eprintln!("rbtrfs: warning: gc of {} failed: {e:#}", root.display()),
             }
@@ -173,7 +181,12 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         println!("gc: deleted {gc_deleted} old local snapshot(s)");
     }
 
-    Ok(RunOutcome { run_id, merged, parts: parts.len(), gc_deleted })
+    Ok(RunOutcome {
+        run_id,
+        merged,
+        parts: parts.len(),
+        gc_deleted,
+    })
 }
 
 /// Globs for one job: the profile's excludes re-rooted onto the snapshot, plus
@@ -209,17 +222,26 @@ fn dry_run_report(
         }
     }
     // Validate what a real run would need, without writing anything.
-    let handle = RepoHandle::from_profile(profile).context("repository configuration / password")?;
+    let handle =
+        RepoHandle::from_profile(profile).context("repository configuration / password")?;
     match handle.exists().context("checking repository")? {
         true => println!("repository {}: found, would append", profile.repository),
-        false => println!("repository {}: not initialised, would be created", profile.repository),
+        false => println!(
+            "repository {}: not initialised, would be created",
+            profile.repository
+        ),
     }
     for (name, list) in [("pre", &profile.hooks.pre), ("post", &profile.hooks.post)] {
         for cmd in list {
             println!("  {name}-hook: {cmd}");
         }
     }
-    Ok(RunOutcome { run_id, merged: SnapshotFile::default(), parts: total, gc_deleted: 0 })
+    Ok(RunOutcome {
+        run_id,
+        merged: SnapshotFile::default(),
+        parts: total,
+        gc_deleted: 0,
+    })
 }
 
 /// Warn about subvolumes nested inside a selected one that will show up as empty
@@ -236,7 +258,9 @@ fn warn_nested(sel: &FilesystemSelection<'_>, profile: &Profile, btrfs: &dyn Btr
     if !crate::is_root() {
         return;
     }
-    let Ok(subvols) = sel.fs.subvolumes(btrfs) else { return };
+    let Ok(subvols) = sel.fs.subvolumes(btrfs) else {
+        return;
+    };
     let rel = |s: &str| s.trim_start_matches('/').to_string();
     let selected: Vec<String> = sel.selected.iter().map(|s| rel(&s.subvol)).collect();
     let mounted: Vec<String> = sel.fs.mounts.iter().map(|m| rel(&m.subvol)).collect();
@@ -247,9 +271,15 @@ fn warn_nested(sel: &FilesystemSelection<'_>, profile: &Profile, btrfs: &dyn Btr
                 || s.is_empty() && !path.is_empty()
         });
         let Some(parent) = under else { continue };
-        let in_staging = sv.path.starts_with(Path::new(parent).join(&profile.staging_name))
+        let in_staging = sv
+            .path
+            .starts_with(Path::new(parent).join(&profile.staging_name))
             || sv.path.starts_with(&profile.staging_name);
-        if sv.read_only || in_staging || selected.contains(&path.to_string()) || mounted.contains(&path.to_string()) {
+        if sv.read_only
+            || in_staging
+            || selected.contains(&path.to_string())
+            || mounted.contains(&path.to_string())
+        {
             continue; // read-only = snapshots (snapper etc.); mounted ones were warned above
         }
         eprintln!(

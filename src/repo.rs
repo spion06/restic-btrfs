@@ -44,7 +44,11 @@ impl RepoHandle {
     pub fn open_or_init(&self) -> Result<Repository<rustic_core::OpenStatus>> {
         if !self.exists()? {
             Repository::new(&self.repo_opts, &self.backends)?
-                .init(&self.creds, &KeyOptions::default(), &ConfigOptions::default())
+                .init(
+                    &self.creds,
+                    &KeyOptions::default(),
+                    &ConfigOptions::default(),
+                )
                 .context("initializing repository")?;
             self.ensure_locks_dir();
         }

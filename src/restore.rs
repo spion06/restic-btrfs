@@ -19,7 +19,10 @@ pub fn list(profile: &Profile, all: bool) -> Result<()> {
     let mut snaps = repo.get_all_snapshots().context("listing snapshots")?;
     snaps.sort_by(|a, b| a.time.cmp(&b.time));
 
-    println!("{:<10}  {:<20}  {:<8}  {:<16}  TAGS / PATHS", "ID", "TIME", "KIND", "HOST");
+    println!(
+        "{:<10}  {:<20}  {:<8}  {:<16}  TAGS / PATHS",
+        "ID", "TIME", "KIND", "HOST"
+    );
     for s in &snaps {
         let is_part = s.tags.iter().any(|t| t == PART_TAG);
         if is_part && !all {
@@ -98,7 +101,11 @@ pub fn ls(profile: &Profile, snapshot: &str, path: &Path, host: &HostFilter) -> 
         if rel.is_empty() {
             continue;
         }
-        let full = if base.is_empty() { format!("/{rel}") } else { format!("/{base}/{rel}") };
+        let full = if base.is_empty() {
+            format!("/{rel}")
+        } else {
+            format!("/{base}/{rel}")
+        };
         writeln!(out, "{} {:>12} {full}", kind(&n), n.meta.size)?;
     }
     Ok(())
@@ -122,7 +129,10 @@ pub fn dump(profile: &Profile, snapshot: &str, path: &Path, host: &HostFilter) -
     let repo = handle.open()?.to_indexed().context("indexing repository")?;
     let node = locate(&repo, snapshot, path, host)?;
     if !node.is_file() {
-        bail!("{} is not a regular file; use `ls` or `restore`", path.display());
+        bail!(
+            "{} is not a regular file; use `ls` or `restore`",
+            path.display()
+        );
     }
     let mut out = std::io::stdout().lock();
     repo.dump(&node, &mut out).context("dumping file")?;
@@ -150,7 +160,10 @@ pub fn restore(
 
     let created = if as_subvolume {
         if !node.is_dir() {
-            bail!("--as-subvolume needs a directory to restore, {} is not one", subvol.display());
+            bail!(
+                "--as-subvolume needs a directory to restore, {} is not one",
+                subvol.display()
+            );
         }
         if !crate::is_root() {
             bail!("--as-subvolume needs root");
@@ -174,7 +187,8 @@ pub fn restore(
         let plan = repo
             .prepare_restore(&opts, streamer.clone(), &dest, false)
             .context("preparing restore")?;
-        repo.restore(plan, &opts, streamer, &dest).context("restoring")
+        repo.restore(plan, &opts, streamer, &dest)
+            .context("restoring")
     })();
 
     if let Err(e) = result {
@@ -184,6 +198,10 @@ pub fn restore(
         }
         return Err(e);
     }
-    println!("restored {} from {snapshot} to {}", subvol.display(), target.display());
+    println!(
+        "restored {} from {snapshot} to {}",
+        subvol.display(),
+        target.display()
+    );
     Ok(())
 }
