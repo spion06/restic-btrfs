@@ -3,6 +3,24 @@
 All notable changes are documented here. Entries from 0.1.1 on are generated from
 commit messages when a release is made; see [CONTRIBUTING.md](CONTRIBUTING.md#releasing).
 
+## 0.1.1 - 2026-10-04
+
+### Added
+
+- backup: Report what exclude patterns skip in the dry run
+- backup: Skip directories marked with CACHEDIR.TAG; add exclude_if_present and exclude_if_xattr
+
+### Documentation
+
+- Describe hooks accurately and document the hourly timer and shutdown backup
+- Correct statements that did not match what the code does
+- Say which release had the mount-point removal bug
+- Describe the mount-point bug plainly
+
+### Fixed
+
+- mount: Don't remove the shared mount-point directory on exit
+
 ## 0.1.0 - 2026-10-04
 
 First release.
