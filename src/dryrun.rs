@@ -14,6 +14,44 @@ pub struct Excluded {
     pub path: PathBuf,
     pub files: u64,
     pub bytes: u64,
+    /// `None` for an `exclude` pattern; otherwise the marker that caused it, such as
+    /// `contains CACHEDIR.TAG` or `xattr user.nobackup`.
+    pub reason: Option<String>,
+}
+
+/// Marker files and extended attributes that exclude what they sit in or on.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Markers<'a> {
+    pub present: &'a [String],
+    pub xattr: &'a [String],
+}
+
+impl Markers<'_> {
+    /// Why `path` is excluded by a marker, if it is.
+    fn reason(&self, path: &Path, is_dir: bool) -> Option<String> {
+        if is_dir {
+            if let Some(m) = self.present.iter().find(|m| path.join(m).exists()) {
+                return Some(format!("contains {m}"));
+            }
+        }
+        self.xattr
+            .iter()
+            .find(|x| has_xattr(path, x))
+            .map(|x| format!("xattr {x}"))
+    }
+}
+
+fn has_xattr(path: &Path, name: &str) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let (Ok(p), Ok(n)) = (
+        CString::new(path.as_os_str().as_bytes()),
+        CString::new(name),
+    ) else {
+        return false;
+    };
+    // SAFETY: valid NUL-terminated strings; a null buffer with size 0 only queries the size.
+    unsafe { nix::libc::lgetxattr(p.as_ptr(), n.as_ptr(), std::ptr::null_mut(), 0) >= 0 }
 }
 
 #[derive(Debug, Default)]
@@ -36,7 +74,7 @@ impl Scan {
 /// Walk `root`, applying `globs` (already in rustic's form, see `excludes::translate`).
 /// Other filesystems and nested subvolumes below `root` are not entered, matching what
 /// a backup of `root` would store.
-pub fn scan(root: &Path, globs: Vec<String>) -> Result<Scan> {
+pub fn scan(root: &Path, globs: Vec<String>, markers: &Markers<'_>) -> Result<Scan> {
     let matcher = Excludes::default()
         .globs(globs)
         .as_override()
@@ -53,9 +91,19 @@ pub fn scan(root: &Path, globs: Vec<String>) -> Result<Scan> {
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(md) = entry.metadata() else { continue }; // does not follow symlinks
-            if matcher.matched(&path, md.is_dir()).is_ignore() {
+            let reason = if matcher.matched(&path, md.is_dir()).is_ignore() {
+                Some(None)
+            } else {
+                markers.reason(&path, md.is_dir()).map(Some)
+            };
+            if let Some(reason) = reason {
                 let (files, bytes) = measure(&path, &md, &mut out.unreadable);
-                out.excluded.push(Excluded { path, files, bytes });
+                out.excluded.push(Excluded {
+                    path,
+                    files,
+                    bytes,
+                    reason,
+                });
             } else if md.is_dir() {
                 if md.dev() == root_dev {
                     stack.push(path);
@@ -144,7 +192,12 @@ mod tests {
         write(r, "proj/src/main.rs", 30);
         write(r, "skip.tmp", 7);
 
-        let s = scan(r, globs(r, &["*.tmp", ".cache", "/data/proj/target"])).unwrap();
+        let s = scan(
+            r,
+            globs(r, &["*.tmp", ".cache", "/data/proj/target"]),
+            &Markers::default(),
+        )
+        .unwrap();
         assert_eq!((s.files, s.bytes), (3, 60), "keep.txt, readme.md, main.rs");
         let got: Vec<(String, u64, u64)> = s
             .excluded
@@ -175,10 +228,94 @@ mod tests {
     }
 
     #[test]
+    fn marker_files_exclude_their_directory_and_say_why() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        write(r, "keep/f", 10);
+        write(r, "target/CACHEDIR.TAG", 5);
+        write(r, "target/debug/big", 900);
+        write(r, "work/.nobackup", 1);
+        write(r, "work/data", 100);
+        let present = vec!["CACHEDIR.TAG".to_string(), ".nobackup".to_string()];
+        let s = scan(
+            r,
+            vec![],
+            &Markers {
+                present: &present,
+                xattr: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!((s.files, s.bytes), (1, 10), "only keep/f remains");
+        let got: Vec<(String, Option<String>)> = s
+            .excluded
+            .iter()
+            .map(|e| {
+                (
+                    e.path
+                        .strip_prefix(r)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    e.reason.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "target".to_string(),
+                    Some("contains CACHEDIR.TAG".to_string())
+                ),
+                ("work".to_string(), Some("contains .nobackup".to_string())),
+            ]
+        );
+        // no markers configured: everything is counted
+        assert_eq!(scan(r, vec![], &Markers::default()).unwrap().files, 5);
+    }
+
+    #[test]
+    fn xattr_markers_exclude_files_and_directories() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        write(r, "plain", 3);
+        write(r, "tagged/inside", 50);
+        write(r, "tagged_file", 7);
+        let set = |p: &Path| {
+            use std::os::unix::ffi::OsStrExt;
+            let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+            let n = std::ffi::CString::new("user.nobackup").unwrap();
+            // SAFETY: valid NUL-terminated strings and a one-byte value.
+            unsafe { nix::libc::lsetxattr(c.as_ptr(), n.as_ptr(), b"1".as_ptr().cast(), 1, 0) == 0 }
+        };
+        if !(set(&r.join("tagged")) && set(&r.join("tagged_file"))) {
+            eprintln!("skipping: this filesystem does not support user xattrs");
+            return;
+        }
+        let xattr = vec!["user.nobackup".to_string()];
+        let s = scan(
+            r,
+            vec![],
+            &Markers {
+                present: &[],
+                xattr: &xattr,
+            },
+        )
+        .unwrap();
+        assert_eq!((s.files, s.bytes), (1, 3));
+        assert!(s
+            .excluded
+            .iter()
+            .all(|e| e.reason.as_deref() == Some("xattr user.nobackup")));
+        assert_eq!(s.excluded.len(), 2);
+    }
+
+    #[test]
     fn nothing_excluded_means_everything_is_counted() {
         let t = tempfile::tempdir().unwrap();
         write(t.path(), "a/b/c.txt", 5);
-        let s = scan(t.path(), vec![]).unwrap();
+        let s = scan(t.path(), vec![], &Markers::default()).unwrap();
         assert_eq!((s.files, s.bytes, s.excluded.len()), (1, 5, 0));
     }
 
@@ -187,7 +324,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         write(t.path(), "real/file", 100);
         std::os::unix::fs::symlink(t.path().join("real"), t.path().join("link")).unwrap();
-        let s = scan(t.path(), vec![]).unwrap();
+        let s = scan(t.path(), vec![], &Markers::default()).unwrap();
         assert_eq!(
             s.files, 2,
             "the file plus the symlink itself, not its target twice"

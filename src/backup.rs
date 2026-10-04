@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rustic_core::{
     repofile::{Node, SnapshotFile},
-    BackupOptions, Excludes, ParentOptions, PathList, SnapshotOptions,
+    BackupOptions, Excludes, LocalSourceFilterOptions, ParentOptions, PathList, SnapshotOptions,
 };
 
 use crate::btrfs::{BtrfsOps, LibBtrfsUtil};
@@ -146,7 +146,12 @@ pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutc
             // btrfs snapshots present files under a fresh subvolume: inode
             // numbers are stable within a snapshot but the device is not.
             .parent_opts(ParentOptions::default().ignore_inode(true))
-            .excludes(Excludes::default().globs(globs));
+            .excludes(Excludes::default().globs(globs))
+            .ignore_filter_opts(
+                LocalSourceFilterOptions::default()
+                    .exclude_if_present(profile.exclude_if_present.clone())
+                    .exclude_if_xattr(profile.exclude_if_xattr.clone()),
+            );
         let source = PathList::from_string(&read_path.to_string_lossy())?.sanitize()?;
         let part = repo
             .backup(&opts, &source, snap)
@@ -374,7 +379,11 @@ fn report_file_selection(
                 continue;
             }
         };
-        let s = match scan(&root, globs) {
+        let markers = crate::dryrun::Markers {
+            present: &profile.exclude_if_present,
+            xattr: &profile.exclude_if_xattr,
+        };
+        let s = match scan(&root, globs, &markers) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("rbtrfs: warning: could not scan {}: {e:#}", root.display());
@@ -390,7 +399,10 @@ fn report_file_selection(
             human(s.excluded_bytes())
         );
         for e in s.excluded.iter().take(15) {
-            println!("    {:>9}  {}", human(e.bytes), e.path.display());
+            match &e.reason {
+                Some(why) => println!("    {:>9}  {}  ({why})", human(e.bytes), e.path.display()),
+                None => println!("    {:>9}  {}", human(e.bytes), e.path.display()),
+            }
         }
         if s.excluded.len() > 15 {
             println!("    ... and {} more", s.excluded.len() - 15);

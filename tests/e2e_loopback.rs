@@ -1962,3 +1962,66 @@ fn background_commands_run_with_low_priority_settings() {
         "{io}"
     );
 }
+
+#[test]
+fn marker_files_and_xattrs_exclude_directories() {
+    e2e!();
+    let fx = Fx::new("markers", &["@a"]);
+    let a = &fx.mounts[0];
+    for (d, files) in [
+        ("keep", &["f.txt"][..]),
+        ("cache", &["CACHEDIR.TAG", "blob"][..]),
+        ("custom", &[".nobackup", "data"][..]),
+        ("tagged", &["inside"][..]),
+    ] {
+        fs::create_dir_all(a.join(d)).unwrap();
+        for f in files {
+            fs::write(a.join(d).join(f), b"x").unwrap();
+        }
+    }
+    sh(&format!(
+        "setfattr -n user.nobackup -v 1 '{}'",
+        a.join("tagged").display()
+    ));
+
+    let restore = |name: &str| -> Vec<String> {
+        let r = fx.restore("latest", a, name);
+        let mut dirs: Vec<String> = fs::read_dir(&r)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        dirs.sort();
+        dirs
+    };
+
+    // default: only CACHEDIR.TAG directories are skipped, and the dry run says why
+    fx.write_cfg(&fx.mounts.clone(), "");
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    assert!(
+        plan.contains(&format!("{}/cache  (contains CACHEDIR.TAG)", a.display())),
+        "{plan}"
+    );
+    fx.ok(&["backup"]);
+    assert_eq!(restore("r1"), ["custom", "keep", "tagged"]);
+
+    // any marker file name and extended attribute can be added
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        "exclude_if_present = [\"CACHEDIR.TAG\", \".nobackup\"]\nexclude_if_xattr = [\"user.nobackup\"]\n",
+    );
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    assert!(
+        plan.contains("(contains .nobackup)") && plan.contains("(xattr user.nobackup)"),
+        "{plan}"
+    );
+    fx.ok(&["backup"]);
+    assert_eq!(restore("r2"), ["keep"]);
+
+    // an empty list turns the default off
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.write_cfg(&fx.mounts.clone(), "exclude_if_present = []\n");
+    fx.ok(&["backup"]);
+    assert_eq!(restore("r3"), ["cache", "custom", "keep", "tagged"]);
+}

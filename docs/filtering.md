@@ -31,6 +31,40 @@ A trailing `/` limits a pattern to directories.
 NB: do not start a pattern with `!`. Patterns are exclusions already, and rbtrfs
 rejects a leading `!`.
 
+## Cache directories and other markers
+
+Many tools mark a directory as disposable by putting a file called `CACHEDIR.TAG` in
+it ([the convention](https://bford.info/cachedir/)). It is an ordinary file, not an
+extended attribute, and its first line is a fixed signature. Cargo writes one in
+every `target/` directory, fontconfig in its caches, and `restic` and `rustic` in
+theirs. rbtrfs skips any directory that contains one, so build output and caches
+are left out without having to list them.
+
+`exclude_if_present` is the list of file names that do this. The default is
+`["CACHEDIR.TAG"]`:
+
+```toml
+exclude_if_present = ["CACHEDIR.TAG", ".nobackup"]   # also skip directories holding .nobackup
+exclude_if_present = []                              # skip nothing, back up caches too
+```
+
+The directory is skipped completely. It is not even stored as an empty directory.
+rbtrfs only checks that the file exists, not that it holds the signature.
+
+`exclude_if_xattr` does the same with an extended attribute on a file or directory,
+for tagging things with `setfattr -n user.nobackup -v 1 some/dir`:
+
+```toml
+exclude_if_xattr = ["user.nobackup"]
+```
+
+The dry run shows these too, with the reason in brackets:
+
+```
+/home: would store 698185 files (137.2 GB); excluded 12 path(s) (183.2 GB)
+      47.7 GB  /home/alice/projects/rbtrfs/target  (contains CACHEDIR.TAG)
+```
+
 ## Checking what your patterns do
 
 A dry run walks the selected paths with the same matcher a backup uses and reports

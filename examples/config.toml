@@ -24,6 +24,9 @@ subvolumes = ["/", "/home", "/srv"]
 #   exclude_subvolumes = ["/var/cache", "/var/tmp"]
 # Excludes work like restic's: "/path" is as recorded in the backup; anything else matches at any depth.
 exclude = ["**/.cache", "*.tmp"]
+# Directories holding a CACHEDIR.TAG file (cargo target/, many caches) are skipped by
+# default. Add more marker names, or set [] to back them up:
+# exclude_if_present = ["CACHEDIR.TAG", ".nobackup"]
 tags = ["rbtrfs", "nightly"]
 keep_local = 2
 # zstd level for new data: 1..22, -7..-1 for the fast levels, 0 for none. Unset = default.

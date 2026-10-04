@@ -105,6 +105,16 @@ pub struct Profile {
     #[serde(default)]
     pub exclude: Vec<String>,
 
+    /// Skip any directory that contains a file with one of these names. The default,
+    /// `CACHEDIR.TAG`, is the standard marker that cargo, fontconfig and many other
+    /// tools put in cache directories. Set to `[]` to back up everything.
+    #[serde(default = "default_exclude_if_present")]
+    pub exclude_if_present: Vec<String>,
+
+    /// Skip files and directories that have one of these extended attributes set.
+    #[serde(default)]
+    pub exclude_if_xattr: Vec<String>,
+
     /// Tags to set on the merged snapshot.
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
@@ -281,6 +291,9 @@ pub enum HookFailure {
     Warn,
 }
 
+fn default_exclude_if_present() -> Vec<String> {
+    vec!["CACHEDIR.TAG".to_string()]
+}
 fn default_nice() -> i32 {
     10
 }
@@ -436,6 +449,14 @@ impl Profile {
         }
         if matches!(&self.subvolumes, Subvolumes::List(v) if v.is_empty()) {
             bail!("`subvolumes` must not be empty");
+        }
+        for m in &self.exclude_if_present {
+            if m.is_empty() || m.contains('/') {
+                bail!("exclude_if_present entries are file names without a slash, got {m:?}");
+            }
+        }
+        if self.exclude_if_xattr.iter().any(|x| x.is_empty()) {
+            bail!("exclude_if_xattr entries must not be empty");
         }
         if !(0..=19).contains(&self.nice) {
             bail!("nice must be between 0 and 19, got {}", self.nice);
@@ -729,6 +750,33 @@ mod tests {
             p.extra_paths,
             [PathBuf::from("/boot"), PathBuf::from("/mnt/nas/share")]
         );
+    }
+
+    #[test]
+    fn marker_defaults_and_validation() {
+        let parse = |extra: &str| {
+            let cfg: Config = toml::from_str(&format!(
+                "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/h\"]\n{extra}"
+            ))
+            .unwrap();
+            let p = cfg.profile("default").unwrap().clone();
+            p.validate().map(|_| p)
+        };
+        let d = parse("").unwrap();
+        assert_eq!(d.exclude_if_present, ["CACHEDIR.TAG"]);
+        assert!(d.exclude_if_xattr.is_empty());
+        let c =
+            parse("exclude_if_present = [\".nobackup\"]\nexclude_if_xattr = [\"user.nobackup\"]\n")
+                .unwrap();
+        assert_eq!(c.exclude_if_present, [".nobackup"]);
+        assert_eq!(c.exclude_if_xattr, ["user.nobackup"]);
+        assert!(parse("exclude_if_present = []")
+            .unwrap()
+            .exclude_if_present
+            .is_empty());
+        assert!(parse("exclude_if_present = [\"a/b\"]").is_err());
+        assert!(parse("exclude_if_present = [\"\"]").is_err());
+        assert!(parse("exclude_if_xattr = [\"\"]").is_err());
     }
 
     #[test]
