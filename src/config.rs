@@ -72,6 +72,11 @@ pub struct Profile {
     #[serde(default)]
     pub exclude_subvolumes: Vec<String>,
 
+    /// Directories on any filesystem to back up live (not snapshotted) next to the
+    /// subvolumes, for example `/boot`.
+    #[serde(default)]
+    pub extra_paths: Vec<PathBuf>,
+
     /// Exclude patterns passed through to the backup engine.
     #[serde(default)]
     pub exclude: Vec<String>,
@@ -569,6 +574,21 @@ mod tests {
         assert_eq!(get("[\"/home\"]"), Subvolumes::List(vec!["/home".into()]));
         assert!(parse("\"everything\"").is_err());
         assert!(parse("5").is_err());
+    }
+
+    #[test]
+    fn extra_paths_parse() {
+        let cfg: Config = toml::from_str(
+            "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = [\"/\"]\n\
+             extra_paths = [\"/boot\", \"/mnt/nas/share\"]\n",
+        )
+        .unwrap();
+        let p = cfg.profile("default").unwrap();
+        p.validate().unwrap();
+        assert_eq!(
+            p.extra_paths,
+            [PathBuf::from("/boot"), PathBuf::from("/mnt/nas/share")]
+        );
     }
 
     #[test]

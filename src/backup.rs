@@ -44,8 +44,19 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         warn_nested(sel, profile, &btrfs);
     }
 
+    let selected: Vec<&select::Selected> = resolution
+        .selections
+        .iter()
+        .flat_map(|s| &s.selected)
+        .collect();
+    let mounts = crate::mountinfo::read().context("reading /proc/self/mountinfo")?;
+    let extras = crate::extra::plan(&profile.extra_paths, &mounts, &selected, |p| p.is_dir())?;
+    for w in &extras.warnings {
+        eprintln!("rbtrfs: warning: {w}");
+    }
+
     if dry_run {
-        return dry_run_report(profile, &resolution, run_id);
+        return dry_run_report(profile, &resolution, &extras.paths, run_id);
     }
 
     let _lock = lock::acquire()?;
@@ -86,6 +97,16 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         .map(|j| job_excludes(profile, j))
         .collect::<Result<_>>()?;
 
+    let extra_excludes: Vec<Vec<String>> = extras
+        .paths
+        .iter()
+        .map(|e| {
+            let read = std::fs::canonicalize(&e.path).unwrap_or_else(|_| e.path.clone());
+            excludes::translate(&profile.exclude, &e.path, &read, &[])
+                .with_context(|| format!("exclude patterns for {}", e.path.display()))
+        })
+        .collect::<Result<_>>()?;
+
     println!(
         "run {run_id}: {} subvolume(s) across {} filesystem(s)",
         all_jobs.len(),
@@ -102,15 +123,18 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     println!("snapshotted {} subvolume(s)", all_jobs.len());
 
     // --- back up each read-only snapshot, recording the real mount point ---
-    let mut parts = Vec::with_capacity(all_jobs.len());
-    for (job, excl) in all_jobs.iter().zip(job_excludes) {
+    let backup_part = |key: &str,
+                       read_path: &Path,
+                       record_path: &Path,
+                       globs: Vec<String>|
+     -> Result<SnapshotFile> {
         // Re-open per part: the in-memory index must see the trees written so far.
         let repo = handle
             .open()?
             .to_indexed_ids()
             .context("indexing repository")?;
         let mut snap = SnapshotOptions::default()
-            .label(format!("rbtrfs-part:{}", job.key))
+            .label(format!("rbtrfs-part:{key}"))
             .add_tags("rbtrfs:part")?
             .add_tags(&format!("rbtrfs:run={run_id}"))?
             .to_snapshot()?;
@@ -118,18 +142,27 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
         snap.time = burst_time.clone();
 
         let opts = BackupOptions::default()
-            .as_path(job.record_path.clone())
+            .as_path(record_path.to_path_buf())
             // btrfs snapshots present files under a fresh subvolume: inode
             // numbers are stable within a snapshot but the device is not.
             .parent_opts(ParentOptions::default().ignore_inode(true))
-            .excludes(Excludes::default().globs(excl));
-        // Read from the SNAPSHOT (dest), never the live subvolume (src).
-        let source = PathList::from_string(&job.dest.to_string_lossy())?.sanitize()?;
+            .excludes(Excludes::default().globs(globs));
+        let source = PathList::from_string(&read_path.to_string_lossy())?.sanitize()?;
         let part = repo
             .backup(&opts, &source, snap)
-            .with_context(|| format!("backing up {}", job.record_path.display()))?;
-        println!("  backed up {} ({})", job.record_path.display(), part.id);
-        parts.push(part);
+            .with_context(|| format!("backing up {}", record_path.display()))?;
+        println!("  backed up {} ({})", record_path.display(), part.id);
+        Ok(part)
+    };
+
+    let mut parts = Vec::with_capacity(all_jobs.len() + extras.paths.len());
+    for (job, excl) in all_jobs.iter().zip(job_excludes) {
+        // Read from the SNAPSHOT (dest), never the live subvolume (src).
+        parts.push(backup_part(&job.key, &job.dest, &job.record_path, excl)?);
+    }
+    // Extra paths are not snapshotted: they are read live, after the snapshots.
+    for (extra, excl) in extras.paths.iter().zip(extra_excludes) {
+        parts.push(backup_part(&extra.key, &extra.path, &extra.path, excl)?);
     }
 
     // --- merge into one snapshot (re-open so the index sees the new trees) ---
@@ -210,6 +243,7 @@ fn job_excludes(profile: &Profile, job: &SnapJob) -> Result<Vec<String>> {
 fn dry_run_report(
     profile: &Profile,
     resolution: &select::Resolution<'_>,
+    extras: &[crate::extra::ExtraPath],
     run_id: String,
 ) -> Result<RunOutcome> {
     let selections = &resolution.selections;
@@ -225,6 +259,13 @@ fn dry_run_report(
                 s.mount_point.display()
             );
         }
+    }
+    for e in extras {
+        println!(
+            "  {} (extra path, read live, not snapshotted) -> recorded as {}",
+            e.path.display(),
+            e.path.display()
+        );
     }
     for mp in &resolution.excluded {
         println!("  skipping {} (exclude_subvolumes)", mp.display());
@@ -247,7 +288,7 @@ fn dry_run_report(
     Ok(RunOutcome {
         run_id,
         merged: SnapshotFile::default(),
-        parts: total,
+        parts: total + extras.len(),
         gc_deleted: 0,
     })
 }

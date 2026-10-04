@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod discover;
 pub mod excludes;
+pub mod extra;
 pub mod forget;
 pub mod gc;
 pub mod gendocs;

@@ -31,6 +31,7 @@ keep_daily = 7
 | `backend_options_hot`, `backend_options_cold` | `{}` | The same, for the hot or the cold part only. |
 | `password`, `password_file`, `password_command` | one required | The repository password. Set exactly one. |
 | `subvolumes` | required | Mount points to back up: a list of exact paths or globs, or `"all"`. |
+| `extra_paths` | `[]` | Directories on any filesystem to back up live, next to the subvolumes. |
 | `exclude_subvolumes` | `[]` | Mount points to leave out of `subvolumes`. Exact paths or globs. |
 | `exclude` | `[]` | Patterns to leave out. See [Filtering](filtering.md). |
 | `tags` | `["rbtrfs"]` | Tags to put on each backup. |
@@ -84,6 +85,36 @@ btrfs snapshots are not recursive. If a subvolume is nested inside one you selec
 it shows up as an empty directory in the backup unless you select it too. rbtrfs
 warns about every such subvolume, mounted or not. Read-only ones, such as snapper
 snapshots, are ignored.
+
+## Extra paths
+
+rbtrfs only snapshots btrfs. `extra_paths` adds directories from other filesystems,
+such as `/boot`, to the same backup:
+
+```toml
+subvolumes  = ["/", "/home"]
+extra_paths = ["/boot", "/mnt/nas/share"]
+```
+
+Each path must be an absolute path to a directory. It does not have to be a mount
+point. An extra path is stored under its real path, so `rbtrfs restore --subvol /boot`
+and `rbtrfs ls` work like they do for subvolumes. It is also incremental, and the
+`exclude` patterns apply to it.
+
+Extra paths are not snapshots. rbtrfs reads them live, after the snapshots are
+taken and after the `post` hooks have run. A file that changes while it is being
+read can end up inconsistent, and hooks cannot pause a service for an extra path.
+For `/boot` that rarely matters.
+
+rbtrfs checks the paths before it takes any snapshot:
+
+- A path inside a selected subvolume is an error, because the snapshot already
+  covers it and a live copy would take its place in the backup. A directory on a
+  different filesystem that is mounted inside a selected subvolume, like `/boot`
+  under `/`, is fine.
+- A path on a btrfs filesystem that you did not select gets a warning. Add that
+  mount to `subvolumes` to back it up from a snapshot.
+- A path that is missing, relative, or not a directory is an error.
 
 ## Hooks
 

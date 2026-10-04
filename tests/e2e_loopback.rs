@@ -1692,3 +1692,113 @@ fn filesystems_mounted_inside_a_subvolume_are_not_backed_up() {
     );
     assert!(!fx.ok(&["ls", "latest"]).contains("secret.txt"));
 }
+
+#[test]
+fn extra_paths_are_backed_up_live_next_to_the_subvolumes() {
+    e2e!();
+    let fx = Fx::new("extrapaths", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("keep.txt"), b"snapshotted").unwrap();
+
+    // two non-btrfs directories: one mounted inside the subvolume, one elsewhere
+    let inner = a.join("other");
+    let outer = fx.base().join("ext");
+    for d in [&inner, &outer] {
+        fs::create_dir_all(d).unwrap();
+        sh(&format!("mount -t tmpfs tmpfs '{}'", d.display()));
+    }
+    fs::write(inner.join("secret.txt"), b"inner live").unwrap();
+    fs::write(inner.join("skip.log"), b"excluded").unwrap();
+    fs::write(outer.join("data.txt"), b"outer live").unwrap();
+
+    fx.write_cfg(
+        &fx.mounts.clone(),
+        &format!(
+            "exclude = [\"*.log\"]\nextra_paths = [\"{}\", \"{}/\"]\n",
+            inner.display(),
+            outer.display()
+        ),
+    );
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    assert!(
+        plan.contains(&format!("{} (extra path", outer.display())),
+        "{plan}"
+    );
+
+    fx.ok(&["backup"]);
+    std::thread::sleep(Duration::from_millis(1100));
+    fx.ok(&["backup"]);
+
+    // the subvolume's backup includes the live contents of the tmpfs inside it
+    let restored = fx.restore("latest", a, "restored-a");
+    assert_eq!(fs::read(restored.join("keep.txt")).unwrap(), b"snapshotted");
+    assert_eq!(
+        fs::read(restored.join("other/secret.txt")).unwrap(),
+        b"inner live"
+    );
+    assert!(
+        !restored.join("other/skip.log").exists(),
+        "exclude applies to extra paths"
+    );
+    // and the outside directory is restorable at its real path
+    let restored_ext = fx.restore("latest", &outer, "restored-ext");
+    assert_eq!(
+        fs::read(restored_ext.join("data.txt")).unwrap(),
+        b"outer live"
+    );
+    assert!(fx
+        .ok(&["ls", "latest"])
+        .contains(&format!("{}/data.txt", outer.display())));
+
+    // extra paths chain to the previous run like subvolumes do, and the repo is valid
+    let v: serde_json::Value = serde_json::from_str(&fx.restic(&["snapshots", "--json"])).unwrap();
+    let label = format!("rbtrfs-part:{}", rbtrfs::select::key_for(&outer));
+    let mut parts: Vec<&serde_json::Value> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            s["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t == "rbtrfs:part")
+        })
+        .filter(|s| s["paths"][0] == outer.to_str().unwrap())
+        .collect();
+    parts.sort_by_key(|s| s["time"].as_str().unwrap().to_string());
+    assert_eq!(parts.len(), 2, "one part per run for {label}");
+    assert_eq!(parts[1]["parent"], parts[0]["id"]);
+    fx.restic_check();
+}
+
+#[test]
+fn bad_extra_paths_stop_the_run_before_anything_is_snapshotted() {
+    e2e!();
+    let fx = Fx::new("extrabad", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::create_dir_all(a.join("plain")).unwrap();
+    fs::write(a.join("file.txt"), b"x").unwrap();
+
+    let try_path = |path: &str, want: &str| {
+        fx.write_cfg(&fx.mounts.clone(), &format!("extra_paths = [\"{path}\"]\n"));
+        let out = fx.run(&["backup"]);
+        assert!(!out.status.success(), "{path} should be rejected");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(want),
+            "{path}: {}",
+            text(&out)
+        );
+        assert!(fx.local_runs(a).is_empty(), "no snapshot for {path}");
+    };
+    // already covered by the snapshot of the selected subvolume
+    try_path(
+        &a.join("plain").to_string_lossy(),
+        "inside the selected subvolume",
+    );
+    try_path(&a.to_string_lossy(), "already selected");
+    // not usable at all
+    try_path(&a.join("file.txt").to_string_lossy(), "not a directory");
+    try_path("/does/not/exist", "not a directory");
+    try_path("relative/dir", "not an absolute path");
+}
