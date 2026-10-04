@@ -107,15 +107,17 @@ usual. `type` can be anything `mount(8)` accepts.
 write the full path, but it has to be below `target`, and a relative path cannot
 contain `..`. The directory is created on the first backup if it does not exist.
 
-The mount is private to the rbtrfs process: it never appears in the host's mount
-table and goes away when the process exits, even if it is killed.
+The mount is private to rbtrfs: it never appears in the host's mount table. It goes
+away when the last process in rbtrfs' mount namespace exits (rbtrfs and anything it
+started, such as `rclone` or a hook), even if rbtrfs is killed. The empty mount-point
+directory under `/run` stays.
 
 NB: because the mount lives in a private mount namespace, every command that opens
 the repository then needs root, including `snapshots`, `ls`, `dump`, `restore`
 and `backup --dry-run`.
 
-A local filesystem stands in for the share in the tests. A real NFS server is not
-covered.
+The test suite uses a local filesystem as a stand-in for the share. NFS has been used
+by hand against a real server, but is not part of the tests.
 
 If the share is already mounted on the host, skip all this and point `repository`
 at the mounted path.

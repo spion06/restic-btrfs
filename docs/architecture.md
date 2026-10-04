@@ -8,6 +8,7 @@ How rbtrfs works and why. For usage see the [README](https://github.com/spion06/
 select subvolumes -> mount the top-level subvolume (private mount namespace)
   -> pre hooks -> take all snapshots -> post hooks
   -> back up each snapshot, recording the real mount point (as_path)
+  -> back up the extra paths, read live
   -> merge the results into one backup -> delete old local snapshots
 ```
 
@@ -24,10 +25,22 @@ plain restic; the test suite checks it with the official `restic check --read-da
 
 The top-level subvolume (`subvolid=5`), where snapshots are staged, is rarely
 mounted. rbtrfs `unshare(CLONE_NEWNS)`s and makes `/` private, then mounts it there:
-invisible to the host, cleaned up by the kernel even on SIGKILL. `unshare` must run
+invisible to the host, and cleaned up by the kernel when the last process in the
+namespace exits, even after a SIGKILL. `unshare` must run
 first, while the process is single-threaded, because it applies per thread and
 rustic_core starts a thread pool. A `staging = "in-subvolume"` fallback needs no
 mount.
+
+A mount namespace isolates the mount table, not the directories under it. Mounts made
+by one rbtrfs process are invisible to every other process, as intended. But a mount
+point is an ordinary directory on the shared `/run`, and removing a directory makes
+Linux detach whatever is mounted on it in every namespace. An early version removed the
+mount-point directory when it exited, which pulled the repository out from under a
+second, running rbtrfs process. The directories are now never removed, and a test runs
+several processes against the same path to keep it that way. The repository does not
+record where it is mounted (its config holds a version, an ID and a chunker value;
+snapshots hold the host and the source paths), so the mount path could also differ per
+run without affecting restic.
 
 ### One snapshot per subvolume, then merge
 
@@ -94,6 +107,9 @@ concept.
 ## Known limitations
 
 - No restic repository lock (see [Maintenance](maintenance.md)).
-- Only local repositories are tested; `opendal` options cannot be configured.
+- Only local repositories and OpenDAL's `fs` service are tested; `rest:`, `rclone:` and
+  the other OpenDAL services are accepted but untested.
+- `extra_paths` are read live, not from a snapshot, so they are not consistent with
+  the snapshotted subvolumes.
 - No mountable (FUSE) restore view; nested subvolumes restore as plain directories.
 - Merged snapshots chain via `parent` for listings; incremental detection uses the parts.

@@ -9,9 +9,8 @@ The default path is `/etc/rbtrfs/config.toml`. Use `--config FILE`, or set
 `$RBTRFS_CONFIG`, to read a different file. The flag wins over the variable.
 
 The file is read once when the command starts. `backup`, `gc` and `forget` run as
-root, so a file you pass with `--config` has to be readable by root. If it holds a
-password or other credentials, make it readable by root only. rbtrfs prints a
-warning if anyone else can read it.
+root. If the file holds a password or other credentials, make it owned by root and
+readable only by root. rbtrfs prints a warning if anyone else can read it.
 
 ## Profiles
 
@@ -78,8 +77,8 @@ start with `#` are comments.
 
 ## Errors
 
-rbtrfs checks the whole file before it does anything, including for `--dry-run`, so
-you can test a change safely:
+Every command that uses a profile checks the whole file, every profile in it, before
+it does anything. That includes `--dry-run`, so you can test a change safely:
 
     rbtrfs backup --dry-run
 

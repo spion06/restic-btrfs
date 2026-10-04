@@ -90,8 +90,9 @@ filesystem is included, not just the one holding `/`.
 
 btrfs snapshots are not recursive. If a subvolume is nested inside one you selected,
 it shows up as an empty directory in the backup unless you select it too. rbtrfs
-warns about every such subvolume, mounted or not. Read-only ones, such as snapper
-snapshots, are ignored.
+warns about every such subvolume that is mounted. Run as root, it also warns about
+ones that are not mounted. Unmounted read-only ones, such as snapper snapshots, are
+ignored.
 
 ## Compression
 
@@ -139,8 +140,8 @@ Ryzen 7 5800X, with the files already in the page cache:
 
 Up to the default level the time barely changes, so turning compression down or off
 does not make a backup faster here. Something other than compression, most likely
-chunking and hashing, sets the pace. Level 9 took four times as long and used all the
-cores for 4% less data. The default is a good choice unless your data is already
+chunking and hashing, sets the pace. Level 9 took four times as long and used about
+six times the CPU time, on eight threads instead of four, for 4% less data. The default is a good choice unless your data is already
 compressed. Results depend heavily on the data, so measure your own if it matters.
 
 ## Priority
@@ -213,16 +214,15 @@ rbtrfs checks the paths before it takes any snapshot:
 
 `hooks.pre` runs before the snapshots are taken and `hooks.post` runs after. Each
 entry is a shell command, passed to `sh -c`, and they run in the order listed. Use
-them to get an application's data into a consistent state before the snapshots and to
-release it again afterwards. The backup itself runs after `post`, from the snapshots,
-so nothing has to stay held back while it runs.
+them for anything that needs to happen around the snapshotting. The backup itself
+runs after `post`, from the snapshots.
 
 Hooks run inside the private mount namespace rbtrfs uses. They see the same mounts
 as the host, but anything they mount is not visible outside.
 
 `post` hooks always run, even if a `pre` hook or the snapshot failed. SIGINT,
-SIGTERM and SIGHUP are held until they finish. This means whatever a `pre` hook
-set up is undone on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
+SIGTERM and SIGHUP are held until they finish, so a `post` hook can always undo
+what a `pre` hook did, even on failure or Ctrl-C. SIGKILL cannot be handled, so it skips them.
 
 With `on_failure = "abort"` a failing hook stops the run. With `"warn"` rbtrfs prints
 the error and carries on.
@@ -233,15 +233,15 @@ the error and carries on.
 `keep_last`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` and
 `keep_yearly`, which take a number, and `keep_within`, which takes a duration such
 as `"14d"`. They have the same meaning as in restic. Without a `retention` table,
-`forget` does nothing. See [Maintenance](maintenance.md#retention).
+`forget` stops with an error instead of removing anything. See [Maintenance](maintenance.md#retention).
 
 ## Staging
 
-rbtrfs keeps each run's read-only snapshots until `keep_local` removes them. The
-`staging` key decides where.
+rbtrfs keeps each run's read-only snapshots until `keep_local`, `keep_local_days` or
+`gc` removes them. The `staging` key decides where.
 
 `"top-level"` is the default. Snapshots go under the filesystem's top-level
-subvolume, in `.rbtrfs-snapshots`. That subvolume is usually not mounted, so rbtrfs
+subvolume, in a directory named by `staging_name` (`.rbtrfs-snapshots` by default). That subvolume is usually not mounted, so rbtrfs
 mounts it inside its private mount namespace for the run.
 
 `"in-subvolume"` puts the snapshots in `<mountpoint>/.rbtrfs-snapshots` instead and

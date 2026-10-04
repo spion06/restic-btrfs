@@ -85,5 +85,5 @@ Sizes are the files' apparent sizes, before compression and deduplication. Run i
 root to include directories your own user cannot read. Add `--no-scan` to skip the
 walk and print only the plan.
 
-Files that are not in a selected subvolume are never backed up. See
+Files outside the selected subvolumes and the `extra_paths` are never backed up. See
 [Configuration](configuration.md#subvolumes) for how subvolumes are chosen.

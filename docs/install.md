@@ -14,10 +14,11 @@ your `PATH`:
     sudo install -m755 rbtrfs-v0.1.0-x86_64-linux/rbtrfs /usr/local/bin/
 
 The binary links against `libbtrfsutil`, which comes with `btrfs-progs` (package
-`libbtrfsutil1` on Debian and Ubuntu). Any version from btrfs-progs 5.16 on works.
-It needs glibc 2.34 or newer, which covers Debian 12, Ubuntu 22.04, RHEL 9 and
-anything more recent. `mount(8)` is
-only needed if you use `repository_mount`.
+`libbtrfsutil1` on Debian and Ubuntu). The functions rbtrfs uses exist in
+every version from btrfs-progs 5.16 (checked against the library's symbol list, not by
+running each version). It needs glibc 2.34 or newer, which should cover Debian 12,
+Ubuntu 22.04, RHEL 9 and anything more recent. `mount(8)` is only needed if you use
+`repository_mount`.
 
 ## From source
 

@@ -61,9 +61,7 @@ you restore come back as plain directories.
 ## Hooks
 
 Hooks are commands that run just before and just after the snapshots are taken. Use
-them to bring something into a consistent state first and release it again
-afterwards, for example to flush an application's data or to stop a service that
-writes to the subvolumes.
+them for anything that needs to happen around the snapshotting.
 
 ```toml
 [profile.default.hooks]
@@ -71,8 +69,7 @@ pre  = ["/usr/local/bin/before-snapshot"]
 post = ["/usr/local/bin/after-snapshot"]
 ```
 
-The backup itself runs after the `post` hooks, from the snapshots, so nothing has to
-stay held back while it runs.
+The backup itself runs after the `post` hooks, from the snapshots.
 
 `post` hooks always run, even if a `pre` hook or the snapshot failed, and
 SIGINT, SIGTERM and SIGHUP are held until they finish.

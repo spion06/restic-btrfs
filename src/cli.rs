@@ -163,8 +163,8 @@ pub enum Command {
     ///
     /// Keeps merged backups according to the profile's `retention` table, per
     /// host, and removes the internal per-subvolume snapshots that no future run
-    /// needs. Snapshots that rbtrfs did not create are never touched. Does nothing
-    /// if the profile has no `retention` table.
+    /// needs. Snapshots that rbtrfs did not create are never touched. Stops with an
+    /// error if the profile has no `retention` table.
     ///
     /// Needs root, because it takes the same lock as `backup`.
     Forget {

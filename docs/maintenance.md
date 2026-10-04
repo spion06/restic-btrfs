@@ -19,13 +19,13 @@ through the repository.
 `rbtrfs forget` thins the repository according to the profile's `retention` table.
 It works per host and only looks at backups that rbtrfs made, so your other restic
 snapshots are never touched. It also removes the per-subvolume snapshots that
-`rbtrfs snapshots --all` shows, except those from the newest run, which the next
-backup needs.
+`rbtrfs snapshots --all` shows, except those from the newest run (or later), which
+the next backup needs.
 
 `--dry-run` shows what would be removed. By default `forget` only removes snapshots.
 Add `--prune` to also delete the data nothing refers to any more. rustic does this in
-two steps: the first prune marks unneeded data and a later one deletes it, 23 hours
-afterwards.
+two steps: the first prune marks unneeded data and a later prune, at least 23 hours
+afterwards, deletes it.
 
 `--instant-delete` deletes it straight away. That skips the second step, and if
 anything else uses the repository at the same time, it can corrupt it. On a terminal
@@ -40,8 +40,10 @@ immediately. This is enforced with a lock on `/run/rbtrfs/rbtrfs.lock`.
 restic protects a repository with lock files in the repository itself. rustic_core,
 which rbtrfs uses, does not write them, and rbtrfs cannot add them. So other tools
 that use the same repository are not stopped from running at the same time. What
-happens then depends on the tool. Each of these was tested while a backup was
-running:
+happens then depends on the tool. Every row except `restic backup` and the read-only
+commands was tested by running it while a backup was running. That row was tested
+against a pruning rustic instead, and follows from backups only ever adding to the
+repository:
 
 | Other activity | Safe? |
 |---|---|
