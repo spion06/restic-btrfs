@@ -949,6 +949,24 @@ fn ls_and_dump_read_a_snapshot() {
 
     let dir = fx.run(&["dump", "latest", &a.to_string_lossy()]);
     assert!(!dir.status.success(), "dumping a directory is an error");
+
+    // a reader that closes the pipe early ends the command quietly
+    let piped = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{} ls latest | head -1",
+            env!("CARGO_BIN_EXE_rbtrfs")
+        ))
+        .env("RBTRFS_CONFIG", &fx.cfg)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&piped.stderr);
+    assert!(
+        !err.contains("Broken pipe") && !err.contains("panicked"),
+        "{}",
+        text(&piped)
+    );
+    assert!(!piped.stdout.is_empty());
 }
 
 #[test]

@@ -221,6 +221,19 @@ pub enum Command {
 }
 
 impl Command {
+    /// Commands that only print, so a closed pipe may simply end them.
+    pub fn is_read_only_output(&self) -> bool {
+        matches!(
+            self,
+            Command::Discover { .. }
+                | Command::Snapshots { .. }
+                | Command::Ls { .. }
+                | Command::Dump { .. }
+                | Command::Completions { .. }
+                | Command::Man
+        )
+    }
+
     /// `forget` mutates the repository and must hold the run lock (in /run), so
     /// it needs root even though it touches no btrfs.
     pub fn needs_root(&self, profile: Option<&crate::config::Profile>) -> bool {

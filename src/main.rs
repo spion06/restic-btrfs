@@ -21,6 +21,19 @@ fn main() -> Result<()> {
         rbtrfs::ns::enter_private_namespace().context("entering private mount namespace")?;
     }
 
+    if cli.command.is_read_only_output() {
+        // Reading commands behave like other unix filters: `rbtrfs ls | head` ends
+        // quietly when the reader closes the pipe. Not done for backup/gc/forget,
+        // which must never be killed half-way by a closed stdout.
+        // SAFETY: restoring the default disposition of SIGPIPE; no handler is involved.
+        let _ = unsafe {
+            nix::sys::signal::signal(
+                nix::sys::signal::Signal::SIGPIPE,
+                nix::sys::signal::SigHandler::SigDfl,
+            )
+        };
+    }
+
     rbtrfs::cli::run(cli, profile)
 }
 
