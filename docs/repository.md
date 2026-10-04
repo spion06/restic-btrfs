@@ -13,6 +13,12 @@ Only local paths, and the OpenDAL `fs` service, are covered by the tests. The ot
 are accepted but untested. restic's own `sftp:` and `s3:` URLs are not recognised.
 Use `opendal:sftp` or `opendal:s3`, or an rclone remote.
 
+`backup` creates the repository on the first run. To create it yourself, run
+`rbtrfs init`, which fails if one already exists. Set `auto_init = false` (or pass
+`backup --no-init`) to make `backup` fail on a missing repository instead, which
+catches a wrong path or an unmounted share before it turns into a new, empty
+repository.
+
 The password comes from exactly one of `password`, `password_file` or
 `password_command`.
 

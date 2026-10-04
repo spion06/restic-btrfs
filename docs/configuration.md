@@ -41,6 +41,7 @@ keep_daily = 7
 | `exclude` | `[]` | Patterns to leave out. See [Filtering](filtering.md). |
 | `exclude_if_present` | `["CACHEDIR.TAG"]` | Skip directories that contain a file with one of these names. See [Filtering](filtering.md#cache-directories-and-other-markers). |
 | `exclude_if_xattr` | `[]` | Skip files and directories that have one of these extended attributes. |
+| `auto_init` | `true` | Create the repository on the first backup. With `false`, `backup` fails if there is none; create it with `rbtrfs init`. `backup --no-init` does the same for one run. |
 | `tags` | `["rbtrfs"]` | Tags to put on each backup. |
 | `keep_local` | `1` | How many of the newest local snapshots to keep for each subvolume. |
 | `keep_local_days` | unset | Also keep local snapshots younger than this many days. |

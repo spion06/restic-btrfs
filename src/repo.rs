@@ -47,16 +47,15 @@ impl RepoHandle {
     /// A configured `compression` is set when the repository is created, and
     /// applied to an existing repository if it differs (it is a repository-wide
     /// setting that only affects data written from then on).
-    pub fn open_or_init(&self) -> Result<Repository<rustic_core::OpenStatus>> {
+    pub fn open_or_init(&self, auto_init: bool) -> Result<Repository<rustic_core::OpenStatus>> {
         if !self.exists()? {
-            let mut config = ConfigOptions::default();
-            if let Some(level) = self.compression {
-                config = config.set_compression(level);
+            if !auto_init {
+                anyhow::bail!(
+                    "no repository at {}; create it with `rbtrfs init`",
+                    self.repository
+                );
             }
-            Repository::new(&self.repo_opts, &self.backends)?
-                .init(&self.creds, &KeyOptions::default(), &config)
-                .context("initializing repository")?;
-            self.ensure_locks_dir();
+            self.init()?;
         }
         let mut repo = self.open()?;
         if let Some(level) = self.compression {
@@ -67,6 +66,22 @@ impl RepoHandle {
             }
         }
         Ok(repo)
+    }
+
+    /// Create the repository. Fails if one already exists.
+    pub fn init(&self) -> Result<()> {
+        if self.exists()? {
+            anyhow::bail!("a repository already exists at {}", self.repository);
+        }
+        let mut config = ConfigOptions::default();
+        if let Some(level) = self.compression {
+            config = config.set_compression(level);
+        }
+        Repository::new(&self.repo_opts, &self.backends)?
+            .init(&self.creds, &KeyOptions::default(), &config)
+            .context("initializing repository")?;
+        self.ensure_locks_dir();
+        Ok(())
     }
 
     pub fn open(&self) -> Result<Repository<rustic_core::OpenStatus>> {

@@ -46,6 +46,7 @@ impl Cli {
             | Ls { profile, .. }
             | Dump { profile, .. }
             | Forget { profile, .. }
+            | Init { profile }
             | Gc { profile, .. } => self.load_profile(profile).map(Some),
         }
     }
@@ -85,6 +86,20 @@ pub enum Command {
         /// With `--dry-run`, skip the walk over the files and only print the plan.
         #[arg(long, requires = "dry_run")]
         no_scan: bool,
+        /// Fail if the repository does not exist instead of creating it.
+        /// Same as `auto_init = false` in the profile.
+        #[arg(long)]
+        no_init: bool,
+    },
+    /// Create the repository.
+    ///
+    /// Creates a new restic repository at the profile's `repository`, using its
+    /// password and `compression`. Fails if one already exists. `backup` does
+    /// this by itself unless `auto_init = false` or `--no-init` is set.
+    Init {
+        /// Profile to use from the config file.
+        #[arg(long, default_value = "default")]
+        profile: String,
     },
     /// List the backups in the repository.
     Snapshots {
@@ -293,11 +308,21 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             clap_mangen::Man::new(<Cli as clap::CommandFactory>::command()).render(&mut buf)?;
             write_stdout(&buf)
         }
+        Command::Init { .. } => {
+            let p = loaded.clone().expect("profile loaded for this command");
+            crate::repo::RepoHandle::from_profile(&p)?.init()?;
+            println!("created repository {}", p.repository);
+            Ok(())
+        }
         Command::Backup {
-            dry_run, no_scan, ..
+            dry_run,
+            no_scan,
+            no_init,
+            ..
         } => {
             let p = loaded.clone().expect("profile loaded for this command");
-            let outcome = backup::run(&p, *dry_run, !*no_scan).context("backup run")?;
+            let auto_init = p.auto_init && !*no_init;
+            let outcome = backup::run(&p, *dry_run, !*no_scan, auto_init).context("backup run")?;
             if !*dry_run {
                 println!(
                     "done: run {} — {} part(s), merged {}, {} local snapshot(s) gc'd",

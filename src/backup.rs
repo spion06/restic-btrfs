@@ -27,7 +27,12 @@ pub struct RunOutcome {
     pub gc_deleted: usize,
 }
 
-pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutcome> {
+pub fn run(
+    profile: &Profile,
+    dry_run: bool,
+    scan_files: bool,
+    auto_init: bool,
+) -> Result<RunOutcome> {
     let run_id = runid::now();
     let filesystems = discover::discover()?;
     let resolution = select::resolve(
@@ -56,7 +61,14 @@ pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutc
     }
 
     if dry_run {
-        return dry_run_report(profile, &resolution, &extras.paths, run_id, scan_files);
+        return dry_run_report(
+            profile,
+            &resolution,
+            &extras.paths,
+            run_id,
+            scan_files,
+            auto_init,
+        );
     }
 
     let _lock = lock::acquire()?;
@@ -91,7 +103,7 @@ pub fn run(profile: &Profile, dry_run: bool, scan_files: bool) -> Result<RunOutc
 
     // Fail on a bad repository/password/excludes BEFORE running any hook or taking any snapshot.
     let handle = RepoHandle::from_profile(profile)?;
-    handle.open_or_init()?;
+    handle.open_or_init(auto_init)?;
     let job_excludes: Vec<Vec<String>> = all_jobs
         .iter()
         .map(|j| job_excludes(profile, j))
@@ -251,6 +263,7 @@ fn dry_run_report(
     extras: &[crate::extra::ExtraPath],
     run_id: String,
     scan_files: bool,
+    auto_init: bool,
 ) -> Result<RunOutcome> {
     let selections = &resolution.selections;
     let total: usize = selections.iter().map(|s| s.selected.len()).sum();
@@ -284,8 +297,12 @@ fn dry_run_report(
         RepoHandle::from_profile(profile).context("repository configuration / password")?;
     match handle.exists().context("checking repository")? {
         true => println!("repository {}: found, would append", profile.repository),
-        false => println!(
+        false if auto_init => println!(
             "repository {}: not initialised, would be created",
+            profile.repository
+        ),
+        false => anyhow::bail!(
+            "no repository at {}; create it with `rbtrfs init`",
             profile.repository
         ),
     }

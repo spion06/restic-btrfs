@@ -115,6 +115,11 @@ pub struct Profile {
     #[serde(default)]
     pub exclude_if_xattr: Vec<String>,
 
+    /// Create the repository on the first backup if it does not exist. Set to
+    /// `false` to make `backup` fail instead; create it with `rbtrfs init`.
+    #[serde(default = "default_true")]
+    pub auto_init: bool,
+
     /// Tags to set on the merged snapshot.
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
@@ -314,6 +319,9 @@ pub enum IoPriority {
     Normal,
 }
 
+fn default_true() -> bool {
+    true
+}
 fn default_tags() -> Vec<String> {
     vec!["rbtrfs".to_string()]
 }

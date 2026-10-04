@@ -58,5 +58,6 @@ fn command_name(c: &Command) -> &'static str {
         Command::Dump { .. } => "dump",
         Command::Forget { .. } => "forget",
         Command::Gc { .. } => "gc",
+        Command::Init { .. } => "init",
     }
 }

@@ -6,6 +6,7 @@ Every command also accepts `-c, --config <CONFIG>`.
 
 - [`rbtrfs discover`](rbtrfs_discover.md): Show btrfs filesystems, mounts and subvolumes.
 - [`rbtrfs backup`](rbtrfs_backup.md): Snapshot the selected subvolumes and back them up.
+- [`rbtrfs init`](rbtrfs_init.md): Create the repository.
 - [`rbtrfs snapshots`](rbtrfs_snapshots.md): List the backups in the repository.
 - [`rbtrfs restore`](rbtrfs_restore.md): Restore one subvolume from a backup.
 - [`rbtrfs ls`](rbtrfs_ls.md): List the contents of a backup.

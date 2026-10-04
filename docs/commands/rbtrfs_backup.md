@@ -28,6 +28,10 @@ Print the plan and check the repository and password, but change nothing. It als
 
 With `--dry-run`, skip the walk over the files and only print the plan.
 
+### `--no-init`
+
+Fail if the repository does not exist instead of creating it. Same as `auto_init = false` in the profile.
+
 ### `-c, --config <CONFIG>`
 
 Config file. Defaults to $RBTRFS_CONFIG, then /etc/rbtrfs/config.toml.

@@ -23,6 +23,7 @@
 - [Command reference](commands/index.md)
   - [rbtrfs discover](commands/rbtrfs_discover.md)
   - [rbtrfs backup](commands/rbtrfs_backup.md)
+  - [rbtrfs init](commands/rbtrfs_init.md)
   - [rbtrfs snapshots](commands/rbtrfs_snapshots.md)
   - [rbtrfs restore](commands/rbtrfs_restore.md)
   - [rbtrfs ls](commands/rbtrfs_ls.md)

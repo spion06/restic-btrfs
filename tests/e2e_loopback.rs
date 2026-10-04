@@ -2074,3 +2074,55 @@ fn another_rbtrfs_process_does_not_pull_the_repository_out_from_under_a_backup()
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn init_creates_the_repository_and_auto_init_can_be_disabled() {
+    e2e!();
+    let fx = Fx::new("init", &["@a"]);
+    fs::write(fx.mounts[0].join("f"), b"x").unwrap();
+
+    // --no-init: a missing repository is an error and nothing is created or snapshotted.
+    let out = fx.run(&["backup", "--no-init"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("rbtrfs init"), "should point at init: {err}");
+    assert!(!fx.repo().join("config").exists());
+    assert!(fx.local_runs(&fx.mounts[0]).is_empty());
+
+    // The dry run reports the same problem.
+    let out = fx.run(&["backup", "--dry-run", "--no-init"]);
+    assert!(!out.status.success());
+
+    fx.ok(&["init"]);
+    assert!(fx.repo().join("config").exists());
+
+    // A second init refuses to touch the existing repository.
+    let config_before = fs::read(fx.repo().join("config")).unwrap();
+    let out = fx.run(&["init"]);
+    assert!(!out.status.success());
+    assert_eq!(config_before, fs::read(fx.repo().join("config")).unwrap());
+
+    fx.ok(&["backup", "--no-init"]);
+}
+
+#[test]
+fn auto_init_false_in_the_config_disables_creation() {
+    e2e!();
+    let fx = Fx::new("autoinit", &["@a"]);
+    let cfg = fs::read_to_string(&fx.cfg).unwrap();
+    fs::write(
+        &fx.cfg,
+        cfg.replacen(
+            "password = \"pw\"",
+            "password = \"pw\"\nauto_init = false",
+            1,
+        ),
+    )
+    .unwrap();
+    let out = fx.run(&["backup"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("rbtrfs init"));
+    assert!(!fx.repo().join("config").exists());
+    fx.ok(&["init"]);
+    fx.ok(&["backup"]);
+}
