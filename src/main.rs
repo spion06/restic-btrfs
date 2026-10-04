@@ -29,6 +29,7 @@ fn command_name(c: &Command) -> &'static str {
         Command::Discover { .. } => "discover",
         Command::Completions { .. } => "completions",
         Command::Man => "man",
+        Command::Gendocs { .. } => "gendocs",
         Command::Backup { .. } => "backup",
         Command::Snapshots { .. } => "snapshots",
         Command::Restore { .. } => "restore",

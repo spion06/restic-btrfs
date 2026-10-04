@@ -10,6 +10,7 @@ pub mod discover;
 pub mod excludes;
 pub mod forget;
 pub mod gc;
+pub mod gendocs;
 pub mod hooks;
 pub mod lock;
 pub mod mountinfo;

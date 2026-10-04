@@ -1,46 +1,41 @@
 # rbtrfs
 
-rbtrfs is a backup tool for btrfs. It snapshots a set of subvolumes together and
-stores them in a restic repository, with each subvolume under its real path
-(`/home`, `/srv`, and so on).
+[![CI](https://github.com/spion06/restic-btrfs/actions/workflows/ci.yml/badge.svg)](https://github.com/spion06/restic-btrfs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue)](#license)
 
-The repository is plain restic, so `restic` and `rustic` can read it directly.
-rbtrfs uses [rustic_core](https://github.com/rustic-rs/rustic_core) to write it.
+[Install](docs/install.md) · [Usage](docs/usage.md) · [Documentation](docs/README.md) · [Releases](https://github.com/spion06/restic-btrfs/releases)
 
-A backup takes read-only snapshots of every selected subvolume back to back, then
-reads the data from those snapshots instead of the live filesystem. The snapshots
-are staged under the top-level subvolume, which rbtrfs mounts inside a private
-mount namespace. The host's mount table is never touched, and nothing is left
-mounted if the process is killed. Because rustic_core can record a different path
-than the one it reads from, files keep the same path from run to run and unchanged
-files are not read again.
+rbtrfs *("restic for btrfs snapshots")* is a command-line program that backs up btrfs
+subvolumes together into a restic repository, with each subvolume stored under its
+real path.
 
-btrfs cannot snapshot several subvolumes atomically. Creating each snapshot takes
-about 2 ms, so the snapshots of one run are a few milliseconds apart. Each file is
-consistent, but two files in different subvolumes may not be. If that matters, use
-`pre` and `post` hooks to quiesce whatever writes to them.
+A run takes read-only snapshots of all the selected subvolumes back to back, then
+reads the backup from those snapshots instead of the live filesystem. The result is
+one restic snapshot containing `/`, `/home`, `/srv` and whatever else you chose.
 
-## Install
+## Features
 
-Linux only. Release tarballs for x86_64 and aarch64 are on the
-[releases page](https://github.com/spion06/restic-btrfs/releases). They need
-`libbtrfsutil` (from `btrfs-progs`) at runtime.
+- Snapshots all selected subvolumes in one burst, about 2 ms apart ([how](docs/architecture.md))
+- Backs up from the read-only snapshots, not the live data
+- Stores one restic snapshot with every subvolume at its real path
+- Writes a plain restic repository that `restic` and `rustic` can read ([repository](docs/repository.md))
+- Skips unchanged files, because paths stay the same from run to run
+- Stages snapshots in a private mount namespace, so the host's mount table is never touched
+- Runs `pre` and `post` hooks around the snapshot, and always runs `post` ([hooks](docs/usage.md#hooks))
+- Excludes files with restic-style patterns ([filtering](docs/filtering.md))
+- Applies a retention policy and prunes ([maintenance](docs/maintenance.md))
+- Restores to a directory or a new btrfs subvolume, and can list and print files from a backup
+- Can mount an NFS or CIFS repository privately for the run ([repository](docs/repository.md#a-share-that-is-not-mounted-on-the-host))
+- Generates its own man page and shell completions
 
-To build from source you need Rust 1.91 or newer, the `libbtrfsutil` headers,
-`pkg-config` and libclang:
+btrfs cannot snapshot several subvolumes atomically, so two files in different
+subvolumes may be a few milliseconds apart. Each file is consistent. Use hooks if
+something needs more.
 
-    cargo install --path .
-
-The binary generates its own man page and shell completions:
-
-    rbtrfs man | sudo tee /usr/local/share/man/man1/rbtrfs.1 >/dev/null
-    rbtrfs completions bash | sudo tee /etc/bash_completion.d/rbtrfs >/dev/null
-
-## Usage
-
-Write a config to `/etc/rbtrfs/config.toml`:
+## Quick start
 
 ```toml
+# /etc/rbtrfs/config.toml
 [profile.default]
 repository    = "/mnt/backup/restic"
 password_file = "/etc/rbtrfs/repo.pw"
@@ -48,47 +43,35 @@ subvolumes    = ["/", "/home", "/srv"]
 exclude       = ["**/.cache", "*.tmp"]
 ```
 
-Then:
-
-    rbtrfs discover               # list btrfs mounts and subvolumes
-    rbtrfs backup --dry-run       # show what would be backed up
-    sudo rbtrfs backup            # the first run creates the repository
-    rbtrfs snapshots              # list backups
+    rbtrfs discover                # list btrfs mounts and subvolumes
+    rbtrfs backup --dry-run        # show what would be backed up
+    sudo rbtrfs backup             # the first run creates the repository
+    rbtrfs snapshots               # list backups
     sudo rbtrfs restore latest --subvol /home --target /mnt/restore
 
-Other commands:
+## Installation and documentation
 
-- `ls` and `dump` list a snapshot and print a single file from it.
-- `forget` applies a retention policy to the repository, optionally with `--prune`.
-- `gc` removes local snapshots left behind by old or crashed runs.
-- `man` and `completions` print the man page and shell completions.
-
-`backup`, `gc` and `forget` need root. `latest` means the newest backup from this
-host; use `--host NAME` or `--any-host` when restoring onto a different machine.
-Use `--config FILE` (or `$RBTRFS_CONFIG`) and `--profile NAME` to choose a
-configuration.
-
-## Notes
-
-The repository can be a local path, `rest:https://...` or `rclone:remote:path`.
-Only local paths are tested. restic's `sftp:` and `s3:` URLs are not supported;
-use `rclone:` for those. A share that is not mounted on the host can be mounted
-privately for a run with `repository_mount`, which is described in the
-configuration docs.
-
-rustic_core cannot take restic's repository lock. Do not run `restic prune` while
-a backup might be running, and do not use `--instant-delete` unless nothing else
-is using the repository. `rbtrfs forget --prune` and rustic's own prune are fine.
-More in [docs/maintenance.md](docs/maintenance.md).
-
-## Documentation
-
+- [Install](docs/install.md)
+- [Usage](docs/usage.md): configure, back up, restore, schedule, exit codes
 - [Configuration](docs/configuration.md)
+- [Filtering](docs/filtering.md)
+- [Repository](docs/repository.md)
 - [Maintenance and safety](docs/maintenance.md)
+- [Command reference](docs/commands/index.md)
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md)
 
+NB: do not run `restic prune` while a backup might be running, and do not use
+`forget --prune --instant-delete` unless nothing else is using the repository.
+rbtrfs cannot take restic's repository lock. See
+[maintenance](docs/maintenance.md#concurrency).
+
+## Downloads
+
+Release tarballs for Linux x86_64 and aarch64 are on the
+[releases page](https://github.com/spion06/restic-btrfs/releases).
+
 ## License
 
-MIT or Apache-2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and
-[LICENSE-APACHE](LICENSE-APACHE).
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT)
+at your option.

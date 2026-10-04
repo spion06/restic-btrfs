@@ -13,10 +13,12 @@ use crate::{backup, discover, gc};
 #[command(
     name = "rbtrfs",
     version,
-    about = "Consistent btrfs-snapshot backups into a restic repo"
+    about = "Back up btrfs subvolumes together into a restic repository",
+    long_about = "rbtrfs snapshots a set of btrfs subvolumes together and stores them in a restic \
+repository, with each subvolume under its real path. See https://github.com/spion06/restic-btrfs"
 )]
 pub struct Cli {
-    /// Config file (default: $RBTRFS_CONFIG or /etc/rbtrfs/config.toml).
+    /// Config file. Defaults to $RBTRFS_CONFIG, then /etc/rbtrfs/config.toml.
     #[arg(long, short, global = true)]
     pub config: Option<PathBuf>,
 
@@ -37,7 +39,7 @@ impl Cli {
     pub fn profile(&self) -> Result<Option<crate::config::Profile>> {
         use Command::*;
         match &self.command {
-            Discover { .. } | Completions { .. } | Man => Ok(None),
+            Discover { .. } | Completions { .. } | Man | Gendocs { .. } => Ok(None),
             Backup { profile, .. }
             | Snapshots { profile, .. }
             | Restore { profile, .. }
@@ -51,119 +53,170 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Show detected btrfs filesystems and their mounted subvolumes. Read-only.
+    /// Show btrfs filesystems, mounts and subvolumes.
+    ///
+    /// Lists every mounted btrfs filesystem with its mounts, and, when run as
+    /// root, all of its subvolumes. Use it to find the mount points to put in
+    /// `subvolumes`. It changes nothing.
     Discover {
-        /// Emit JSON instead of a table.
+        /// Print JSON instead of text.
         #[arg(long)]
         json: bool,
     },
     /// Snapshot the selected subvolumes and back them up.
+    ///
+    /// Runs the `pre` hooks, takes a read-only snapshot of every selected
+    /// subvolume back to back, runs the `post` hooks, then backs the snapshots up
+    /// into the repository as one snapshot with each subvolume at its real mount
+    /// path. Finally it deletes local snapshots beyond `keep_local`. The
+    /// repository is created on the first run.
+    ///
+    /// Needs root. Only one backup, gc or forget runs at a time on a machine.
     Backup {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
-        /// Show what would happen without touching anything.
+        /// Print the plan and check the repository and password, but change nothing.
+        /// Does not need root.
         #[arg(long)]
         dry_run: bool,
     },
-    /// List backup snapshots in the repository.
+    /// List the backups in the repository.
     Snapshots {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
+        /// Also list the internal per-subvolume snapshots that each backup is
+        /// merged from.
         #[arg(long)]
         all: bool,
     },
-    /// Restore a subvolume from a snapshot into a plain directory.
+    /// Restore one subvolume from a backup.
+    ///
+    /// Writes the files recorded under `--subvol` into `--target`. Run it as root
+    /// to restore ownership. With `--as-subvolume` the target is created as a new
+    /// btrfs subvolume; subvolumes that were nested inside the original come back
+    /// as plain directories.
     Restore {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
-        /// Snapshot id, or `latest`.
+        /// Snapshot id, or `latest` for the newest backup from this host.
         snapshot: String,
-        /// Which recorded subvolume path to restore, e.g. `/home`.
+        /// Recorded path of the subvolume to restore, for example `/home`.
         #[arg(long)]
         subvol: PathBuf,
-        /// Destination directory.
+        /// Directory to restore into.
         #[arg(long)]
         target: PathBuf,
-        /// `latest` considers snapshots from this host; name another host (e.g. when
-        /// restoring onto a rebuilt machine)...
+        /// Take `latest` from this host instead of the current one. Useful when
+        /// restoring onto a rebuilt machine.
         #[arg(long, conflicts_with = "any_host")]
         host: Option<String>,
-        /// ...or from any host.
+        /// Take `latest` from any host.
         #[arg(long)]
         any_host: bool,
-        /// Create TARGET as a new btrfs subvolume (root; TARGET must be on btrfs and
-        /// must not exist) instead of a plain directory.
+        /// Create the target as a new btrfs subvolume. Needs root, and the target
+        /// must be on btrfs and must not exist.
         #[arg(long)]
         as_subvolume: bool,
     },
-    /// List the contents of a snapshot (default: everything).
+    /// List the contents of a backup.
     Ls {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
-        /// Snapshot id, or `latest`.
+        /// Snapshot id, or `latest` for the newest backup from this host.
         snapshot: String,
-        /// Recorded path to list, e.g. `/home/alice`.
+        /// Recorded path to list, for example `/home/alice`.
         #[arg(default_value = "/")]
         path: PathBuf,
+        /// Take `latest` from this host instead of the current one.
         #[arg(long, conflicts_with = "any_host")]
         host: Option<String>,
+        /// Take `latest` from any host.
         #[arg(long)]
         any_host: bool,
     },
-    /// Write one file from a snapshot to stdout.
+    /// Write one file from a backup to standard output.
     Dump {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
+        /// Snapshot id, or `latest` for the newest backup from this host.
         snapshot: String,
-        /// Recorded path of the file, e.g. `/etc/fstab`.
+        /// Recorded path of the file, for example `/etc/fstab`.
         path: PathBuf,
+        /// Take `latest` from this host instead of the current one.
         #[arg(long, conflicts_with = "any_host")]
         host: Option<String>,
+        /// Take `latest` from any host.
         #[arg(long)]
         any_host: bool,
     },
-    /// Apply the profile's `retention` to the repository: forget old merged
-    /// snapshots and the part snapshots nothing needs any more.
+    /// Apply the retention policy to the repository.
+    ///
+    /// Keeps merged backups according to the profile's `retention` table, per
+    /// host, and removes the internal per-subvolume snapshots that no future run
+    /// needs. Snapshots that rbtrfs did not create are never touched. Does nothing
+    /// if the profile has no `retention` table.
+    ///
+    /// Needs root, because it takes the same lock as `backup`.
     Forget {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
-        /// Also prune: delete data no remaining snapshot references.
+        /// Also delete data that no remaining snapshot references. By default
+        /// rustic only marks it and removes it on a later prune.
         #[arg(long)]
         prune: bool,
-        /// With --prune: delete unreferenced files immediately instead of marking them
-        /// for later deletion. Only safe if no other restic/rustic process uses the
-        /// repository right now.
+        /// With `--prune`, delete unreferenced data immediately. This skips
+        /// rustic's two-phase pruning and can corrupt the repository if anything
+        /// else is using it. On a terminal you are asked to confirm.
         #[arg(long, requires = "prune")]
         instant_delete: bool,
-        /// Required together with --instant-delete: acknowledges that it bypasses
-        /// rustic's two-phase pruning and can corrupt the repository if anything
-        /// else is using it.
+        /// Confirm `--instant-delete` without asking. Required when not running
+        /// on a terminal.
         #[arg(long, requires = "instant_delete")]
         allow_unsafe: bool,
-        /// Show what would be forgotten, change nothing.
+        /// Show what would be forgotten and change nothing.
         #[arg(long)]
         dry_run: bool,
     },
-    /// Print a shell completion script to stdout.
-    Completions {
-        /// bash, zsh, fish, elvish or powershell.
-        shell: clap_complete::Shell,
-    },
-    /// Print the man page (roff) to stdout.
-    Man,
-    /// Delete local btrfs snapshots left by past (or crashed) runs.
+    /// Delete local snapshots left behind by old or crashed runs.
+    ///
+    /// A backup removes old local snapshots itself. Use this to reclaim ones left
+    /// by a run that was killed, or to apply different `keep_local` settings.
+    ///
+    /// Needs root.
     Gc {
+        /// Profile to use from the config file.
         #[arg(long, default_value = "default")]
         profile: String,
-        /// Override the profile's `keep_local`.
+        /// Keep this many of the newest snapshot sets per subvolume. Overrides
+        /// the profile's `keep_local`.
         #[arg(long)]
         keep_local: Option<usize>,
-        /// Override the profile's `keep_local_days`.
+        /// Also keep sets younger than this many days. Overrides the profile's
+        /// `keep_local_days`.
         #[arg(long)]
         keep_local_days: Option<u64>,
-        /// Also sweep snapshot sets of subvolumes the profile no longer selects.
+        /// Also clean up subvolumes that the profile no longer selects.
         #[arg(long)]
         all_keys: bool,
+    },
+    /// Print a shell completion script.
+    Completions {
+        /// Shell to generate for: bash, zsh, fish, elvish or powershell.
+        shell: clap_complete::Shell,
+    },
+    /// Print the man page.
+    Man,
+    /// Write the command reference as Markdown files (used to build the docs).
+    #[command(hide = true)]
+    Gendocs {
+        /// Directory to write into.
+        dir: PathBuf,
     },
 }
 
@@ -182,7 +235,10 @@ impl Command {
         match self {
             Command::Backup { dry_run, .. } => !dry_run || mounts_repo,
             Command::Gc { .. } => true,
-            Command::Discover { .. } | Command::Completions { .. } | Command::Man => false,
+            Command::Discover { .. }
+            | Command::Completions { .. }
+            | Command::Man
+            | Command::Gendocs { .. } => false,
             _ => mounts_repo,
         }
     }
@@ -203,6 +259,7 @@ pub fn run(cli: Cli, loaded: Option<crate::config::Profile>) -> Result<()> {
             clap_complete::generate(*shell, &mut cmd, "rbtrfs", &mut buf);
             write_stdout(&buf)
         }
+        Command::Gendocs { dir } => crate::gendocs::write_all(dir),
         Command::Man => {
             let mut buf = Vec::new();
             clap_mangen::Man::new(<Cli as clap::CommandFactory>::command()).render(&mut buf)?;

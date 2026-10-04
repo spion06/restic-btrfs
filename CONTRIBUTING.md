@@ -20,6 +20,13 @@ daemon (your user in the `docker` group, or `DOCKER_HOST`). Without one they ski
 with a notice; set `RBTRFS_E2E_REQUIRED=1` to fail instead. As root they run
 directly and need `mkfs.btrfs`, `losetup`, `setfattr`/`getfattr` and `restic`.
 
+## Docs
+
+`docs/commands/` is generated from the CLI definition. After changing a flag or its
+help text, regenerate it, or the test suite fails:
+
+    cargo run -- gendocs docs/commands
+
 ## Guidelines
 
 - Keep btrfs calls behind `BtrfsOps`, and keep the namespace `unshare` first in `main`.
