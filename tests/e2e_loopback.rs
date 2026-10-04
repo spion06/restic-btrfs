@@ -1607,3 +1607,56 @@ fn backend_options_reach_the_storage_backend() {
         .unwrap();
     assert!(out.status.success(), "{}", text(&out));
 }
+
+#[test]
+fn subvolumes_all_and_exclude_subvolumes_shape_the_plan() {
+    e2e!();
+    // Dry run only: "all" on a real machine would snapshot its own subvolumes.
+    let fx = Fx::new("selectall", &["@a", "@b"]);
+    let top = fx.base().join("mnt"); // the top-level subvolume is mounted too
+    let cfg = |extra: &str| {
+        format!(
+            "[profile.default]\nrepository = \"{}\"\npassword = \"pw\"\nsubvolumes = \"all\"\n{extra}",
+            fx.repo().display()
+        )
+    };
+
+    fs::write(&fx.cfg, cfg("")).unwrap();
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    for mp in [&fx.mounts[0], &fx.mounts[1], &top] {
+        assert!(
+            plan.contains(&format!("recorded as {}", mp.display())),
+            "all selects {}:\n{plan}",
+            mp.display()
+        );
+    }
+
+    fs::write(
+        &fx.cfg,
+        cfg(&format!("exclude_subvolumes = [\"{}\"]\n", top.display())),
+    )
+    .unwrap();
+    let plan = fx.ok(&["backup", "--dry-run"]);
+    assert!(
+        plan.contains(&format!("recorded as {}", fx.mounts[0].display())),
+        "{plan}"
+    );
+    assert!(
+        !plan.contains(&format!("recorded as {}", top.display())),
+        "top level excluded:\n{plan}"
+    );
+    assert!(
+        plan.contains(&format!("skipping {} (exclude_subvolumes)", top.display())),
+        "{plan}"
+    );
+
+    // a wrong keyword is a config error
+    fs::write(&fx.cfg, cfg("").replace("\"all\"", "\"everything\"")).unwrap();
+    let bad = fx.run(&["backup", "--dry-run"]);
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("\"all\""),
+        "{}",
+        text(&bad)
+    );
+}

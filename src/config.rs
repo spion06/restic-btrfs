@@ -64,9 +64,13 @@ pub struct Profile {
     #[serde(default)]
     pub password_command: Option<String>,
 
-    /// Mount points to capture. Shell-style globs allowed; matched against the
-    /// set of currently mounted btrfs subvolumes.
-    pub subvolumes: Vec<String>,
+    /// Mount points to capture: a list of exact paths or globs, or the string
+    /// `"all"` for every mounted btrfs subvolume.
+    pub subvolumes: Subvolumes,
+
+    /// Mount points to leave out of `subvolumes` (exact paths or globs).
+    #[serde(default)]
+    pub exclude_subvolumes: Vec<String>,
 
     /// Exclude patterns passed through to the backup engine.
     #[serde(default)]
@@ -100,6 +104,33 @@ pub struct Profile {
 
     #[serde(default)]
     pub hooks: Hooks,
+}
+
+/// Which mounted subvolumes to back up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subvolumes {
+    /// Every mounted btrfs subvolume.
+    All,
+    /// Exact mount points or globs.
+    List(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for Subvolumes {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Text(String),
+            List(Vec<String>),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Text(t) if t == "all" => Ok(Self::All),
+            Raw::Text(t) => Err(serde::de::Error::custom(format!(
+                "`subvolumes` must be a list of mount points or the string \"all\", not {t:?}"
+            ))),
+            Raw::List(v) => Ok(Self::List(v)),
+        }
+    }
 }
 
 /// A filesystem to mount, inside rbtrfs' private mount namespace, before the
@@ -318,7 +349,7 @@ impl Profile {
                 "exactly one of password / password_file / password_command must be set (got {n})"
             );
         }
-        if self.subvolumes.is_empty() {
+        if matches!(&self.subvolumes, Subvolumes::List(v) if v.is_empty()) {
             bail!("`subvolumes` must not be empty");
         }
         if !self.backend_options_hot.is_empty() && self.repository_hot.is_none() {
@@ -517,6 +548,41 @@ mod tests {
         for text in bad {
             assert!(toml::from_str::<Config>(text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn subvolumes_accepts_a_list_or_the_word_all() {
+        let parse = |v: &str| {
+            toml::from_str::<Config>(&format!(
+                "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = {v}\n"
+            ))
+        };
+        let get = |v: &str| {
+            parse(v)
+                .unwrap()
+                .profile("default")
+                .unwrap()
+                .subvolumes
+                .clone()
+        };
+        assert_eq!(get("\"all\""), Subvolumes::All);
+        assert_eq!(get("[\"/home\"]"), Subvolumes::List(vec!["/home".into()]));
+        assert!(parse("\"everything\"").is_err());
+        assert!(parse("5").is_err());
+    }
+
+    #[test]
+    fn exclude_subvolumes_defaults_to_empty() {
+        let cfg: Config = toml::from_str(
+            "[profile.default]\nrepository = \"/r\"\npassword = \"x\"\nsubvolumes = \"all\"\n\
+             exclude_subvolumes = [\"/var/cache\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.profile("default").unwrap().exclude_subvolumes,
+            ["/var/cache"]
+        );
+        cfg.profile("default").unwrap().validate().unwrap();
     }
 
     #[test]

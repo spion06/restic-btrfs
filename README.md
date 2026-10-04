@@ -17,6 +17,7 @@ one restic snapshot containing `/`, `/home`, `/srv` and whatever else you chose.
 
 - Snapshots all selected subvolumes back to back, about 2 ms apart ([how](docs/architecture.md))
 - Backs up from the read-only snapshots, not the live data
+- Backs up the subvolumes you list, or every mounted one with `subvolumes = "all"` ([configuration](docs/configuration.md#subvolumes))
 - Stores one restic snapshot with every subvolume at its real path
 - Writes a plain restic repository that `restic` and `rustic` can read ([repository](docs/repository.md))
 - Skips unchanged files, because paths stay the same from run to run

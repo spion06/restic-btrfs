@@ -12,7 +12,11 @@ use crate::snapshot::{self, GcReport, LocalRetention, StagingArea};
 /// `all_keys` also sweeps keys of subvolumes no longer selected by the profile.
 pub fn run(profile: &Profile, retention: &LocalRetention, all_keys: bool) -> Result<GcReport> {
     let filesystems = discover::discover()?;
-    let resolution = select::resolve(&filesystems, &profile.subvolumes)?;
+    let resolution = select::resolve(
+        &filesystems,
+        &profile.subvolumes,
+        &profile.exclude_subvolumes,
+    )?;
     let btrfs = LibBtrfsUtil;
     let mut report = GcReport::default();
 

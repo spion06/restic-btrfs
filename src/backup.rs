@@ -30,7 +30,11 @@ pub struct RunOutcome {
 pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     let run_id = runid::now();
     let filesystems = discover::discover()?;
-    let resolution = select::resolve(&filesystems, &profile.subvolumes)?;
+    let resolution = select::resolve(
+        &filesystems,
+        &profile.subvolumes,
+        &profile.exclude_subvolumes,
+    )?;
     let btrfs = LibBtrfsUtil;
 
     for w in &resolution.warnings {
@@ -41,7 +45,7 @@ pub fn run(profile: &Profile, dry_run: bool) -> Result<RunOutcome> {
     }
 
     if dry_run {
-        return dry_run_report(profile, &resolution.selections, run_id);
+        return dry_run_report(profile, &resolution, run_id);
     }
 
     let _lock = lock::acquire()?;
@@ -205,9 +209,10 @@ fn job_excludes(profile: &Profile, job: &SnapJob) -> Result<Vec<String>> {
 
 fn dry_run_report(
     profile: &Profile,
-    selections: &[FilesystemSelection<'_>],
+    resolution: &select::Resolution<'_>,
     run_id: String,
 ) -> Result<RunOutcome> {
+    let selections = &resolution.selections;
     let total: usize = selections.iter().map(|s| s.selected.len()).sum();
     println!("run {run_id}: would snapshot {total} subvolume(s):");
     for sel in selections {
@@ -220,6 +225,9 @@ fn dry_run_report(
                 s.mount_point.display()
             );
         }
+    }
+    for mp in &resolution.excluded {
+        println!("  skipping {} (exclude_subvolumes)", mp.display());
     }
     // Validate what a real run would need, without writing anything.
     let handle =

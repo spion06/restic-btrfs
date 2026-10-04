@@ -13,6 +13,7 @@ All notable changes are documented here. The format follows
   `keep_local_days`.
 - Hooks that always run after the snapshot and survive SIGINT/SIGTERM.
 - `backend_options`, `backend_options_hot`, `backend_options_cold` and `repository_hot` to configure the storage backend (rclone, OpenDAL, REST).
+- `subvolumes = "all"` and `exclude_subvolumes` to select every mounted subvolume except some.
 - `repository_mount` to mount an NFS/CIFS/etc. repository privately for a run.
 - `staging = "in-subvolume"` for hosts that cannot mount the top-level subvolume.
 - `man` and `completions <shell>` commands.

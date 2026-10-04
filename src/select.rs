@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
+use crate::config::Subvolumes;
 use crate::discover::{BtrfsFilesystem, BtrfsMount};
 
 /// A source subvolume chosen for backup.
@@ -33,6 +34,8 @@ pub struct Resolution<'a> {
     pub selections: Vec<FilesystemSelection<'a>>,
     /// Matched mounts that were left out, and why (bind mounts, duplicates).
     pub warnings: Vec<String>,
+    /// Mounts that matched `subvolumes` but were removed by `exclude_subvolumes`.
+    pub excluded: Vec<PathBuf>,
 }
 
 /// Directory-name-safe key for a mount point: `/` becomes `-`, and literal `-`
@@ -61,35 +64,59 @@ pub fn key_for(mount_point: &Path) -> String {
     key
 }
 
-/// Match `patterns` (exact paths or globs) against every mounted subvolume across
-/// `filesystems`, returning one [`FilesystemSelection`] per filesystem that has
-/// at least one match.
-pub fn resolve<'a>(
-    filesystems: &'a [BtrfsFilesystem],
-    patterns: &[String],
-) -> Result<Resolution<'a>> {
-    let matchers = patterns
+/// Compile mount-point patterns (exact paths or globs).
+fn compile(patterns: &[String], what: &str) -> Result<Vec<(String, glob::Pattern)>> {
+    patterns
         .iter()
         .map(|p| {
             glob::Pattern::new(p)
                 .map(|pat| (p.clone(), pat))
-                .map_err(|e| anyhow::anyhow!("bad subvolume pattern {p:?}: {e}"))
+                .map_err(|e| anyhow::anyhow!("bad {what} pattern {p:?}: {e}"))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
 
-    let matches = |m: &BtrfsMount| {
-        matchers.iter().any(|(raw, pat)| {
-            m.mount_point.as_path() == Path::new(raw) || pat.matches_path(&m.mount_point)
-        })
+fn any_match(matchers: &[(String, glob::Pattern)], m: &BtrfsMount) -> bool {
+    matchers.iter().any(|(raw, pat)| {
+        m.mount_point.as_path() == Path::new(raw) || pat.matches_path(&m.mount_point)
+    })
+}
+
+/// Match `select` (exact paths, globs, or everything) against every mounted
+/// subvolume across `filesystems`, drop those matching `exclude`, and return one
+/// [`FilesystemSelection`] per filesystem that has at least one subvolume left.
+///
+/// With [`Subvolumes::All`] the bind-mount and duplicate-mount notes are
+/// suppressed: skipping them is the expected outcome there, not a surprise.
+pub fn resolve<'a>(
+    filesystems: &'a [BtrfsFilesystem],
+    select: &Subvolumes,
+    exclude: &[String],
+) -> Result<Resolution<'a>> {
+    let all = matches!(select, Subvolumes::All);
+    let patterns: Vec<String> = match select {
+        Subvolumes::All => vec!["/**".to_string()],
+        Subvolumes::List(v) => v.clone(),
     };
+    let matchers = compile(&patterns, "subvolume")?;
+    let excluders = compile(exclude, "exclude_subvolumes")?;
+    let matches = |m: &BtrfsMount| any_match(&matchers, m);
 
     let mut out = Vec::new();
     let mut warnings = Vec::new();
+    let mut excluded = Vec::new();
     let mut total = 0;
     for fs in filesystems {
         let mut selected: Vec<Selected> = Vec::new();
         for m in fs.mounts.iter().filter(|m| matches(m)) {
+            if any_match(&excluders, m) {
+                excluded.push(m.mount_point.clone());
+                continue;
+            }
             if !m.is_subvol_root() {
+                if all {
+                    continue;
+                }
                 warnings.push(format!(
                     "{} is a bind mount of a subdirectory ({}) of subvolume {}, not a whole \
                      subvolume; skipped. Select the subvolume's own mount point instead",
@@ -101,6 +128,9 @@ pub fn resolve<'a>(
             }
             // Mounts are sorted by mount point, so the first mount of a subvolume wins.
             if let Some(first) = selected.iter().find(|s| s.subvol == m.subvol) {
+                if all {
+                    continue;
+                }
                 warnings.push(format!(
                     "{} is the same subvolume ({}) as {}; recorded once, at {}",
                     m.mount_point.display(),
@@ -124,7 +154,7 @@ pub fn resolve<'a>(
         let nested_unselected = fs
             .nested_unselected(&roots)
             .into_iter()
-            .filter(|m| m.is_subvol_root())
+            .filter(|m| m.is_subvol_root() && !any_match(&excluders, m))
             .map(|m| m.mount_point.clone())
             .collect();
         out.push(FilesystemSelection {
@@ -139,11 +169,15 @@ pub fn resolve<'a>(
         } else {
             format!(" ({})", warnings.join("; "))
         };
+        if all {
+            bail!("no btrfs subvolume is mounted (or all were excluded by exclude_subvolumes)");
+        }
         bail!("no mounted btrfs subvolume matched any of: {patterns:?}{detail}");
     }
     Ok(Resolution {
         selections: out,
         warnings,
+        excluded,
     })
 }
 
@@ -169,6 +203,10 @@ mod tests {
         p.iter().map(|s| s.to_string()).collect()
     }
 
+    fn list(p: &[&str]) -> Subvolumes {
+        Subvolumes::List(pats(p))
+    }
+
     #[test]
     fn keys_do_not_collide() {
         assert_eq!(key_for(Path::new("/var/log")), "var-log");
@@ -185,14 +223,14 @@ mod tests {
     #[test]
     fn exact_and_glob_patterns() {
         let f = fss();
-        let r = resolve(&f, &pats(&["/home", "/srv"])).unwrap();
+        let r = resolve(&f, &list(&["/home", "/srv"]), &[]).unwrap();
         let keys: Vec<_> = r.selections[0]
             .selected
             .iter()
             .map(|s| s.key.as_str())
             .collect();
         assert_eq!(keys, ["home", "srv"]);
-        let r = resolve(&f, &pats(&["/home/*"])).unwrap();
+        let r = resolve(&f, &list(&["/home/*"]), &[]).unwrap();
         assert_eq!(
             r.selections[0].selected[0].mount_point,
             PathBuf::from("/home/vm")
@@ -202,7 +240,7 @@ mod tests {
     #[test]
     fn bind_mounts_are_skipped_with_a_warning() {
         let f = fss();
-        let r = resolve(&f, &pats(&["/srv/data", "/srv"])).unwrap();
+        let r = resolve(&f, &list(&["/srv/data", "/srv"]), &[]).unwrap();
         let mps: Vec<_> = r.selections[0]
             .selected
             .iter()
@@ -218,7 +256,7 @@ mod tests {
     #[test]
     fn same_subvolume_mounted_twice_is_recorded_once() {
         let f = fss();
-        let r = resolve(&f, &pats(&["/home", "/mnt/home-again"])).unwrap();
+        let r = resolve(&f, &list(&["/home", "/mnt/home-again"]), &[]).unwrap();
         assert_eq!(r.selections[0].selected.len(), 1);
         assert_eq!(
             r.selections[0].selected[0].mount_point,
@@ -230,7 +268,7 @@ mod tests {
     #[test]
     fn nested_mounted_subvolume_is_flagged() {
         let f = fss();
-        let r = resolve(&f, &pats(&["/home"])).unwrap();
+        let r = resolve(&f, &list(&["/home"]), &[]).unwrap();
         assert_eq!(
             r.selections[0].nested_unselected,
             [PathBuf::from("/home/vm")]
@@ -238,7 +276,52 @@ mod tests {
     }
 
     #[test]
+    fn all_selects_every_whole_subvolume_quietly() {
+        let f = fss();
+        let r = resolve(&f, &Subvolumes::All, &[]).unwrap();
+        let mps: Vec<_> = r.selections[0]
+            .selected
+            .iter()
+            .map(|s| s.mount_point.to_str().unwrap())
+            .collect();
+        // the bind mount (/srv/data) and the second mount of @home are skipped
+        assert_eq!(mps, ["/", "/home", "/home/vm", "/srv"]);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn exclude_subvolumes_removes_matches_and_is_reported() {
+        let f = fss();
+        let r = resolve(&f, &Subvolumes::All, &pats(&["/srv", "/home/*"])).unwrap();
+        let mps: Vec<_> = r.selections[0]
+            .selected
+            .iter()
+            .map(|s| s.mount_point.to_str().unwrap())
+            .collect();
+        assert_eq!(mps, ["/", "/home"]);
+        assert!(r.excluded.contains(&PathBuf::from("/srv")));
+        assert!(r.excluded.contains(&PathBuf::from("/home/vm")));
+    }
+
+    #[test]
+    fn excluding_a_nested_mount_silences_its_warning() {
+        let f = fss();
+        let warned = resolve(&f, &list(&["/home"]), &[]).unwrap();
+        assert_eq!(
+            warned.selections[0].nested_unselected,
+            [PathBuf::from("/home/vm")]
+        );
+        let quiet = resolve(&f, &list(&["/home"]), &pats(&["/home/vm"])).unwrap();
+        assert!(quiet.selections[0].nested_unselected.is_empty());
+    }
+
+    #[test]
+    fn excluding_everything_is_an_error() {
+        assert!(resolve(&fss(), &Subvolumes::All, &pats(&["/**"])).is_err());
+    }
+
+    #[test]
     fn no_match_is_an_error() {
-        assert!(resolve(&fss(), &pats(&["/nope"])).is_err());
+        assert!(resolve(&fss(), &list(&["/nope"]), &[]).is_err());
     }
 }

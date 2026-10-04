@@ -17,6 +17,9 @@ repository = "/mnt/backup/restic"
 #   options = "vers=4.2"
 password_file = "/etc/rbtrfs/repo.pw"
 subvolumes = ["/", "/home", "/srv"]
+# Or every mounted btrfs subvolume, minus some:
+#   subvolumes = "all"
+#   exclude_subvolumes = ["/var/cache", "/var/tmp"]
 # Excludes work like restic's: "/path" is as recorded in the backup; anything else matches at any depth.
 exclude = ["**/.cache", "*.tmp"]
 tags = ["rbtrfs", "nightly"]
