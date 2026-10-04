@@ -1660,3 +1660,35 @@ fn subvolumes_all_and_exclude_subvolumes_shape_the_plan() {
         text(&bad)
     );
 }
+
+#[test]
+fn filesystems_mounted_inside_a_subvolume_are_not_backed_up() {
+    e2e!();
+    let fx = Fx::new("otherfs", &["@a"]);
+    let a = &fx.mounts[0];
+    fs::write(a.join("keep.txt"), b"in the subvolume").unwrap();
+    // a different filesystem mounted on a directory inside the selected subvolume
+    fs::create_dir_all(a.join("other")).unwrap();
+    sh(&format!(
+        "mount -t tmpfs tmpfs '{}'",
+        a.join("other").display()
+    ));
+    fs::write(a.join("other/secret.txt"), b"not on btrfs").unwrap();
+
+    fx.ok(&["backup"]);
+
+    let restored = fx.restore("latest", a, "restored");
+    assert_eq!(
+        fs::read(restored.join("keep.txt")).unwrap(),
+        b"in the subvolume"
+    );
+    assert!(
+        restored.join("other").is_dir(),
+        "the mount point is just an empty directory"
+    );
+    assert!(
+        !restored.join("other/secret.txt").exists(),
+        "data of another filesystem leaked in"
+    );
+    assert!(!fx.ok(&["ls", "latest"]).contains("secret.txt"));
+}

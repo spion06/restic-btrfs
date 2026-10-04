@@ -75,6 +75,11 @@ rbtrfs only snapshots mounts of a whole subvolume. If a path is a bind mount of 
 subdirectory, rbtrfs skips it and prints a warning. If the same subvolume is mounted
 in two places, it is backed up once, under the first mount point.
 
+rbtrfs only backs up btrfs. Other filesystems, such as an ext4 or vfat `/boot`, tmpfs
+or NFS mounted inside a selected subvolume, are not included. They appear as empty
+directories, and rbtrfs does not warn about them. With `"all"`, every mounted btrfs
+filesystem is included, not just the one holding `/`.
+
 btrfs snapshots are not recursive. If a subvolume is nested inside one you selected,
 it shows up as an empty directory in the backup unless you select it too. rbtrfs
 warns about every such subvolume, mounted or not. Read-only ones, such as snapper
