@@ -130,7 +130,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # Built on Ubuntu 22.04 so the binary only needs glibc 2.34. That image's
       # libbtrfsutil header is too old for the crate, so build a newer one; at runtime
       # any libbtrfsutil.so.1 from btrfs-progs 5.16 or newer works.
